@@ -1,0 +1,24 @@
+# ninja log v7
+30	8325	8136243574396712	CMakeFiles/HIDS_Dashboard.dir/HIDSDashboard.cpp.obj	ce9d45e4c067fb45
+12526	17957	8136202347900137	CMakeFiles/HIDS_Dashboard.dir/third_party/imgui/imgui_tables.cpp.obj	55ff61dda71e7348
+12883	17444	8136202351468487	CMakeFiles/HIDS_Dashboard.dir/third_party/imgui/backends/imgui_impl_opengl3.cpp.obj	c6dc090e1ce2b29d
+11298	18772	8136202336841388	CMakeFiles/HIDS_Dashboard.dir/third_party/imgui/imgui_draw.cpp.obj	1a3c003d8e76f4
+12715	19461	8136202349962036	CMakeFiles/HIDS_Dashboard.dir/third_party/imgui/imgui_widgets.cpp.obj	bea0b61727700b61
+12766	17827	8136202350559004	CMakeFiles/HIDS_Dashboard.dir/third_party/imgui/backends/imgui_impl_glfw.cpp.obj	1398689852c91de4
+10816	21083	8136202331038889	CMakeFiles/HIDS_Dashboard.dir/third_party/imgui/imgui.cpp.obj	5a2f3be029afc4f2
+5661	6210	8136250247803138	HIDS_Dashboard.exe	8f872f7cc769d3de
+63	3108	8136202223262107	CMakeFiles/HIDS_Dashboard.dir/EventFilter.cpp.obj	949e6f2bbe33a59f
+30	3480	8136202222905546	CMakeFiles/HIDS_Dashboard.dir/Alert.cpp.obj	77e9e8a560c32f73
+52	3698	8136202223144249	CMakeFiles/HIDS_Dashboard.dir/EventCollector.cpp.obj	6499eb501d88eea2
+40	3791	8136202223043904	CMakeFiles/HIDS_Dashboard.dir/Event.cpp.obj	df0585355da4b713
+3543	8571	8136202259476026	CMakeFiles/HIDS_Dashboard.dir/LoginMonitor.cpp.obj	7a8a6900574c785d
+6703	10791	8136202292042511	CMakeFiles/HIDS_Dashboard.dir/Rule.cpp.obj	2053b9ec66b98b0
+3159	11213	8136202255811506	CMakeFiles/HIDS_Dashboard.dir/FileMonitor.cpp.obj	81b1223968be5212
+3791	12483	8136202260547460	CMakeFiles/HIDS_Dashboard.dir/ProcessMonitor.cpp.obj	2a46097ce0931c36
+8608	12668	8136202310099147	CMakeFiles/HIDS_Dashboard.dir/RuleEngine.cpp.obj	40a8cfb49caf13ea
+3701	12749	8136202260405509	CMakeFiles/HIDS_Dashboard.dir/OngoingProcessMonitor.cpp.obj	68b6c5a9d584bf7c
+19	5660	8136250191436984	CMakeFiles/HIDS_Dashboard.dir/HIDSBackend.cpp.obj	2ddbd127174eb304
+95	7446	8136243574967813	CMakeFiles/HIDS_Dashboard.dir/SystemResourceMonitor.cpp.obj	3c82170f3d5b3248
+117	8447	8136243575166625	CMakeFiles/HIDS_Dashboard.dir/ResourceHistory.cpp.obj	cf80ccf73c3b8db7
+162	8589	8136243575621874	CMakeFiles/HIDS_Dashboard.dir/AnomalyDetector.cpp.obj	5c68886c4f822810
+147	9887	8136243575483725	CMakeFiles/HIDS_Dashboard.dir/SystemAnalysis.cpp.obj	7bec0380b8a8eb25

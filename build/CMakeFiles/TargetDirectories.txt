@@ -1,0 +1,3 @@
+C:/Users/tanis/OneDrive/Desktop/HIDS/build/CMakeFiles/HIDS_Dashboard.dir
+C:/Users/tanis/OneDrive/Desktop/HIDS/build/CMakeFiles/edit_cache.dir
+C:/Users/tanis/OneDrive/Desktop/HIDS/build/CMakeFiles/rebuild_cache.dir

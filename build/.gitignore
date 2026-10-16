@@ -1,0 +1,17 @@
+
+# Build folders
+build/
+cmake-build-*/
+out/
+Debug/
+Release/
+
+# Compiled files
+*.obj
+*.o
+*.dll
+*.pdb
+
+# Visual Studio generated files
+.vs/
+*.exe
