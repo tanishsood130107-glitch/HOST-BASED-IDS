@@ -1,4 +1,22 @@
 
+// {
+//     "configurations": [
+//         {
+//             "name": "MSYS2 UCRT64",
+//             "includePath": [
+//                 "${workspaceFolder}/**",
+//                 "${workspaceFolder}/third_party/imgui",
+//                 "${workspaceFolder}/third_party/imgui/backends",
+//                 "C:/msys64/ucrt64/include"
+//             ],
+//             "compilerPath": "C:/msys64/ucrt64/bin/g++.exe",
+//             "cppStandard": "c++17",
+//             "intelliSenseMode": "windows-gcc-x64"
+//         }
+//     ],
+//     "version": 4
+// }
+
 {
     "configurations": [
         {
@@ -6,14 +24,13 @@
             "includePath": [
                 "${workspaceFolder}/**",
                 "${workspaceFolder}/third_party/imgui",
-                "${workspaceFolder}/third_party/imgui/backends",
-                "C:/msys64/ucrt64/include"
+                "${workspaceFolder}/third_party/imgui/backends"
             ],
             "compilerPath": "C:/msys64/ucrt64/bin/g++.exe",
             "cppStandard": "c++17",
+            "cStandard": "c17",
             "intelliSenseMode": "windows-gcc-x64"
         }
     ],
     "version": 4
 }
-
