@@ -1,3 +1,6 @@
+
+
+
 // #ifndef NOMINMAX
 // #define NOMINMAX
 // #endif
@@ -482,7 +485,7 @@
  
 //         addRoot(FromUtf8(EnvVar("TEMP")));
 //         addRoot(FromUtf8(EnvVar("APPDATA")));
-//         addRoot(FromUtf8(EnvVar("LOCALAPPDATA")) / L"Temp");
+//         addRoot(fs::path(FromUtf8(EnvVar("LOCALAPPDATA"))) / L"Temp");
 //         addRoot(FromUtf8(EnvVar("PUBLIC")));
 //         addRoot(fs::path(L"C:\\Windows\\Temp"));
 //         addRoot(fs::path(L"HIDS_Monitor"));
@@ -1448,7 +1451,10 @@ struct FileScanner::Impl
  
         addRoot(FromUtf8(EnvVar("TEMP")));
         addRoot(FromUtf8(EnvVar("APPDATA")));
-        addRoot(fs::path(FromUtf8(EnvVar("LOCALAPPDATA"))) / L"Temp");
+        const fs::path localAppData = FromUtf8(EnvVar("LOCALAPPDATA"));
+
+        if (!localAppData.empty())
+            addRoot(localAppData / L"Temp");
         addRoot(FromUtf8(EnvVar("PUBLIC")));
         addRoot(fs::path(L"C:\\Windows\\Temp"));
         addRoot(fs::path(L"HIDS_Monitor"));
@@ -1927,4 +1933,84 @@ bool FileScanner::exportReport(std::string& outPath) const
  
     outPath = name;
     return true;
+}
+
+// ------------------------------------------------------------
+// Signature list (for the Logs & Reports page)
+// ------------------------------------------------------------
+
+int FileScanner::suspiciousThreshold()
+{
+    return SUSPICIOUS_THRESHOLD;
+}
+
+std::vector<SignatureInfo> FileScanner::getSignatures()
+{
+    std::vector<SignatureInfo> list;
+
+    auto add = [&list](const char* category, const std::string& name,
+                       const std::string& pattern, int weight, bool instant)
+    {
+        SignatureInfo s;
+        s.category         = category;
+        s.name             = name;
+        s.pattern          = pattern;
+        s.weight           = weight;
+        s.instantMalicious = instant;
+        list.push_back(s);
+    };
+
+    // ---- Known-bad hashes ----
+    add("Known hash", "EICAR-Test-File", EICAR_SHA256, 10, true);
+
+    {
+        // Optional user list "hids_hashes.txt": "<sha256> <name>" per line
+        int custom = 0;
+        std::ifstream in("hids_hashes.txt");
+        std::string line;
+
+        while (std::getline(in, line))
+        {
+            const std::size_t first = line.find_first_not_of(" \t\r");
+
+            if (first == std::string::npos || line[first] == '#')
+                continue;
+
+            if (line.size() - first >= 64)
+                ++custom;
+        }
+
+        add("Known hash", "Custom hash list",
+            "hids_hashes.txt (" + std::to_string(custom) + " hash(es) loaded)",
+            10, true);
+    }
+
+    // ---- Content signatures ----
+    add("File content", "EICAR antivirus test signature",
+        "Standard EICAR test string", 10, true);
+
+    for (const Signature& sig : SIGNATURES)
+        add("File content", sig.label, sig.needle, sig.weight, false);
+
+    // ---- Content heuristics ----
+    add("File content", "Executable disguised as document/image",
+        "Windows program (MZ header) with a .jpg/.pdf/.txt/.docx... extension", 4, false);
+    add("File content", "High entropy (possibly packed or encrypted)",
+        "Windows program with entropy >= 7.4", 2, false);
+
+    // ---- File name / location heuristics ----
+    add("File name / location", "Right-to-left override character in file name",
+        "Unicode U+202E in the file name", 4, false);
+    add("File name / location", "Double extension",
+        "Runnable file named like invoice.pdf.exe", 4, false);
+    add("File name / location", "Executable in a temp folder",
+        "...\\AppData\\Local\\Temp\\ or ...\\Windows\\Temp\\", 1, false);
+    add("File name / location", "Executable in the Startup folder",
+        "...\\Start Menu\\Programs\\Startup\\", 2, false);
+    add("File name / location", "Executable in the Public folder",
+        "...\\Users\\Public\\", 1, false);
+    add("File name / location", "Hidden executable file",
+        "Executable with the Hidden attribute", 2, false);
+
+    return list;
 }

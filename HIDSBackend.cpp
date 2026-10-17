@@ -1,3 +1,5 @@
+
+
 // #include "HIDSBackend.h"
  
 // #include "Alert.h"
@@ -25,6 +27,7 @@
 // #include <chrono>
 // #include <cstdio>
 // #include <deque>
+// #include <map>
 // #include <mutex>
 // #include <thread>
  
@@ -79,6 +82,70 @@
 //         return timestamp.size() >= 19 ? timestamp.substr(11, 8) : timestamp;
 //     }
  
+//     // ---- "Apps" detection (processes with a normal visible window) ----
+
+//     BOOL CALLBACK EnumAppWindowsProc(HWND hwnd, LPARAM lParam)
+//     {
+//         if (!IsWindowVisible(hwnd))
+//             return TRUE;
+
+//         if (GetWindow(hwnd, GW_OWNER) != nullptr)          // owned popups
+//             return TRUE;
+
+//         if (GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW)
+//             return TRUE;
+
+//         wchar_t title[256];
+//         const int n = GetWindowTextW(hwnd, title, 256);
+
+//         if (n <= 0)
+//             return TRUE;
+
+//         DWORD pid = 0;
+//         GetWindowThreadProcessId(hwnd, &pid);
+
+//         std::map<DWORD, std::string>* out =
+//             reinterpret_cast<std::map<DWORD, std::string>*>(lParam);
+
+//         if (out->find(pid) != out->end())
+//             return TRUE;                                    // keep first (top-most) window
+
+//         char utf8[768];
+//         const int len = WideCharToMultiByte(
+//             CP_UTF8, 0, title, n, utf8, (int)sizeof(utf8), nullptr, nullptr);
+
+//         if (len > 0)
+//             (*out)[pid] = std::string(utf8, (std::size_t)len);
+
+//         return TRUE;
+//     }
+
+//     // Windows pieces that own windows but must never be ended from the UI
+//     bool IsProtectedProcess(const std::string& name, DWORD pid)
+//     {
+//         if (pid <= 4 || pid == GetCurrentProcessId())
+//             return true;
+
+//         std::string lower = name;
+//         for (char& c : lower)
+//             c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+//         static const char* const PROTECTED_NAMES[] = {
+//             "system", "registry", "smss.exe", "csrss.exe", "wininit.exe",
+//             "winlogon.exe", "services.exe", "lsass.exe", "dwm.exe",
+//             "explorer.exe", "applicationframehost.exe", "textinputhost.exe",
+//             "searchhost.exe", "startmenuexperiencehost.exe",
+//             "shellexperiencehost.exe", "sihost.exe", "taskhostw.exe",
+//             "fontdrvhost.exe"
+//         };
+
+//         for (const char* p : PROTECTED_NAMES)
+//             if (lower == p)
+//                 return true;
+
+//         return false;
+//     }
+
 //     // Current local time as "HH:MM:SS" (used for System Analysis alerts)
 //     std::string NowTimeOfDay()
 //     {
@@ -118,6 +185,13 @@
 //     AnomalyDetector       anomalyDetector;
 //     int                   anomalyAlertID;
 //     unsigned long         sampleCounter;
+//     int                   endTaskAlertID = 300000;   // used under dataMutex
+
+//     // ---- File scanner (runs its own thread) ----
+//     FileScanner           scanner;
+//     std::mutex            scanMutex;            // guards scanAlertsSeen
+//     std::size_t           scanAlertsSeen = 0;   // findings already turned into alerts
+//     int                   scanAlertID    = 200000;
  
 //     // ---- Threads ----
 //     std::atomic<bool> running;
@@ -203,6 +277,7 @@
 //         {
 //             pollMonitors();
 //             drainEvents();
+//             pollScanner();
  
 //             sleepWhileRunning(EVENT_POLL_MS);
 //         }
@@ -242,6 +317,43 @@
 //         }
 //     }
  
+//     // Turns new scanner findings into alerts
+//     // (Malicious -> Critical, Suspicious -> Medium).
+//     void pollScanner()
+//     {
+//         std::lock_guard<std::mutex> scanLock(scanMutex);
+
+//         const std::vector<ScanFinding> findings = scanner.getFindings();
+
+//         if (findings.size() < scanAlertsSeen)   // a new scan cleared the list
+//             scanAlertsSeen = 0;
+
+//         if (findings.size() == scanAlertsSeen)
+//             return;
+
+//         std::lock_guard<std::mutex> lock(dataMutex);
+
+//         for (std::size_t i = scanAlertsSeen; i < findings.size(); ++i)
+//         {
+//             const ScanFinding& f = findings[i];
+
+//             BackendAlert a;
+//             a.id          = scanAlertID++;
+//             a.time        = f.time.empty() ? NowTimeOfDay() : f.time;
+//             a.severity    = (f.level == "Malicious") ? "Critical" : "Medium";
+//             a.source      = "File Scanner";
+//             a.rule        = f.name;
+//             a.description = f.name + " - " + f.path + " (" + f.reason + ")";
+
+//             alerts.push_front(a);
+
+//             if (alerts.size() > MAX_ALERTS)
+//                 alerts.pop_back();
+//         }
+
+//         scanAlertsSeen = findings.size();
+//     }
+
 //     // Keeps login and file activity for the Login / File pages.
 //     // Process starts are skipped: there are far too many of them.
 //     void recordEvent(const Event& event)
@@ -336,12 +448,62 @@
 //             list.push_back(std::move(row));
 //         }
  
+//         // Mark "apps": processes that own a normal visible window
+//         std::map<DWORD, std::string> appWindows;
+//         EnumWindows(EnumAppWindowsProc, reinterpret_cast<LPARAM>(&appWindows));
+
+//         for (BackendProcess& row : list)
+//         {
+//             const auto it = appWindows.find(static_cast<DWORD>(row.pid));
+
+//             if (it != appWindows.end() &&
+//                 !IsProtectedProcess(row.name, static_cast<DWORD>(row.pid)))
+//             {
+//                 row.isApp       = true;
+//                 row.windowTitle = it->second;
+//             }
+//         }
+
 //         // Whole-machine CPU / RAM via the System Analysis monitor
 //         const SystemResourceStats res = resourceMonitor.collect();
 //         resourceHistory.addSample(res);
  
 //         // Sustained high CPU / RAM check
 //         const AnomalyResult anomaly = anomalyDetector.evaluate(res);
+
+//         // If the system is overloaded, find the app responsible
+//         // (highest CPU when CPU is the bigger problem, else highest memory).
+//         // Background / system processes are never offered for ending.
+//         bool           hasCulprit = false;
+//         BackendProcess culprit;
+
+//         if (anomaly.detected)
+//         {
+//             const bool byCpu = res.cpuPercent >= res.memoryPercent;
+
+//             const BackendProcess* best = nullptr;
+
+//             for (const BackendProcess& p : list)
+//             {
+//                 if (!p.isApp)
+//                     continue;
+
+//                 if (best == nullptr ||
+//                     (byCpu ? p.cpuPercent > best->cpuPercent
+//                            : p.memoryMB   > best->memoryMB))
+//                 {
+//                     best = &p;
+//                 }
+//             }
+
+//             // Only blame an app that really uses a lot
+//             if (best != nullptr &&
+//                 (byCpu ? best->cpuPercent >= 5.0f : best->memoryMB >= 300.0f))
+//             {
+//                 culprit    = *best;      // copy: 'list' is swapped away below
+//                 hasCulprit = true;
+//             }
+//         }
  
 //         // Run the analysis on the current process list
 //         std::vector<ProcessSnapshot> snapshots;
@@ -419,6 +581,22 @@
 //             a.source      = "System Analysis";
 //             a.rule        = "Resource Anomaly";
 //             a.description = "Resource Anomaly - " + anomaly.message;
+
+//             if (hasCulprit)
+//             {
+//                 char extra[256];
+//                 std::snprintf(extra, sizeof(extra),
+//                     " | Top app: %s (PID %d) - CPU %.0f%%, %.0f MB",
+//                     culprit.name.c_str(), culprit.pid,
+//                     culprit.cpuPercent, culprit.memoryMB);
+
+//                 a.description    += extra;
+//                 a.canEndTask      = true;
+//                 a.culpritPid      = culprit.pid;
+//                 a.culpritName     = culprit.name;
+//                 a.culpritCpu      = culprit.cpuPercent;
+//                 a.culpritMemoryMB = culprit.memoryMB;
+//             }
  
 //             alerts.push_front(a);
  
@@ -465,6 +643,7 @@
 // void HIDSBackend::shutdown()
 // {
 //     impl->running = false;
+//     impl->scanner.shutdown();
 //     impl->joinThreads();
 // }
  
@@ -502,8 +681,130 @@
 //     std::lock_guard<std::mutex> lock(impl->dataMutex);
 //     return impl->analysis;
 // }
- 
 
+// // ------------------------------------------------------------
+// // File scanner
+// // ------------------------------------------------------------
+
+// bool HIDSBackend::startScan(ScanType type, const std::string& customPath)
+// {
+//     std::lock_guard<std::mutex> lock(impl->scanMutex);
+
+//     if (!impl->scanner.start(type, customPath))
+//         return false;
+
+//     impl->scanAlertsSeen = 0;   // scanner cleared its findings in start()
+//     return true;
+// }
+
+// void HIDSBackend::cancelScan()
+// {
+//     impl->scanner.cancel();
+// }
+
+// bool HIDSBackend::isScanRunning() const
+// {
+//     return impl->scanner.isRunning();
+// }
+
+// ScanStatus HIDSBackend::getScanStatus() const
+// {
+//     return impl->scanner.getStatus();
+// }
+
+// std::vector<ScanFinding> HIDSBackend::getScanFindings() const
+// {
+//     return impl->scanner.getFindings();
+// }
+
+// bool HIDSBackend::exportScanReport(std::string& outPath) const
+// {
+//     return impl->scanner.exportReport(outPath);
+// }
+
+// bool HIDSBackend::endTask(int pid, std::string& message, const std::string& expectedName)
+// {
+//     std::string name;
+//     bool isApp = false;
+
+//     {
+//         std::lock_guard<std::mutex> lock(impl->dataMutex);
+
+//         for (const BackendProcess& p : impl->processes)
+//         {
+//             if (p.pid == pid)
+//             {
+//                 name  = p.name;
+//                 isApp = p.isApp;
+//                 break;
+//             }
+//         }
+//     }
+
+//     if (name.empty())
+//     {
+//         message = "That process is no longer running.";
+//         return false;
+//     }
+
+//     // Guard against the PID having been reused by a different program
+//     if (!expectedName.empty() && name != expectedName)
+//     {
+//         message = expectedName + " has already closed.";
+//         return false;
+//     }
+
+//     if (!isApp)
+//     {
+//         message = name + " is a system or background process and cannot be ended from here.";
+//         return false;
+//     }
+
+//     HANDLE handle = OpenProcess(PROCESS_TERMINATE, FALSE, static_cast<DWORD>(pid));
+
+//     if (handle == nullptr)
+//     {
+//         const DWORD error = GetLastError();
+
+//         message = (error == ERROR_ACCESS_DENIED)
+//             ? "Access denied for " + name + " - run HIDS as Administrator."
+//             : "Could not open " + name + " (error " + std::to_string(error) + ").";
+
+//         return false;
+//     }
+
+//     const BOOL ok = TerminateProcess(handle, 1);
+//     CloseHandle(handle);
+
+//     if (!ok)
+//     {
+//         message = "Windows refused to end " + name + ".";
+//         return false;
+//     }
+
+//     message = "Ended " + name + " (PID " + std::to_string(pid) + ").";
+
+//     // Leave an audit entry in the Alerts list
+//     {
+//         std::lock_guard<std::mutex> lock(impl->dataMutex);
+
+//         BackendAlert a;
+//         a.id          = impl->endTaskAlertID++;
+//         a.time        = NowTimeOfDay();
+//         a.severity    = "Low";
+//         a.source      = "Process Control";
+//         a.rule        = "Task Ended";
+//         a.description = "Task Ended - " + message;
+
+//         impl->alerts.push_front(a);
+
+//         if (impl->alerts.size() > MAX_ALERTS)
+//             impl->alerts.pop_back();
+//     }
+
+//     return true;
+// }
+ 
 
 #include "HIDSBackend.h"
  
@@ -515,6 +816,7 @@
 #include "LoginMonitor.h"
 #include "OngoingProcessMonitor.h"   // also pulls in <windows.h> (with NOMINMAX)
 #include "ProcessMonitor.h"
+#include "PasswordLock.h"
 #include "Rule.h"
 #include "RuleEngine.h"
  
@@ -532,6 +834,7 @@
 #include <chrono>
 #include <cstdio>
 #include <deque>
+#include <map>
 #include <mutex>
 #include <thread>
  
@@ -586,6 +889,70 @@ namespace
         return timestamp.size() >= 19 ? timestamp.substr(11, 8) : timestamp;
     }
  
+    // ---- "Apps" detection (processes with a normal visible window) ----
+
+    BOOL CALLBACK EnumAppWindowsProc(HWND hwnd, LPARAM lParam)
+    {
+        if (!IsWindowVisible(hwnd))
+            return TRUE;
+
+        if (GetWindow(hwnd, GW_OWNER) != nullptr)          // owned popups
+            return TRUE;
+
+        if (GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW)
+            return TRUE;
+
+        wchar_t title[256];
+        const int n = GetWindowTextW(hwnd, title, 256);
+
+        if (n <= 0)
+            return TRUE;
+
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hwnd, &pid);
+
+        std::map<DWORD, std::string>* out =
+            reinterpret_cast<std::map<DWORD, std::string>*>(lParam);
+
+        if (out->find(pid) != out->end())
+            return TRUE;                                    // keep first (top-most) window
+
+        char utf8[768];
+        const int len = WideCharToMultiByte(
+            CP_UTF8, 0, title, n, utf8, (int)sizeof(utf8), nullptr, nullptr);
+
+        if (len > 0)
+            (*out)[pid] = std::string(utf8, (std::size_t)len);
+
+        return TRUE;
+    }
+
+    // Windows pieces that own windows but must never be ended from the UI
+    bool IsProtectedProcess(const std::string& name, DWORD pid)
+    {
+        if (pid <= 4 || pid == GetCurrentProcessId())
+            return true;
+
+        std::string lower = name;
+        for (char& c : lower)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+        static const char* const PROTECTED_NAMES[] = {
+            "system", "registry", "smss.exe", "csrss.exe", "wininit.exe",
+            "winlogon.exe", "services.exe", "lsass.exe", "dwm.exe",
+            "explorer.exe", "applicationframehost.exe", "textinputhost.exe",
+            "searchhost.exe", "startmenuexperiencehost.exe",
+            "shellexperiencehost.exe", "sihost.exe", "taskhostw.exe",
+            "fontdrvhost.exe"
+        };
+
+        for (const char* p : PROTECTED_NAMES)
+            if (lower == p)
+                return true;
+
+        return false;
+    }
+
     // Current local time as "HH:MM:SS" (used for System Analysis alerts)
     std::string NowTimeOfDay()
     {
@@ -625,6 +992,79 @@ struct HIDSBackend::Impl
     AnomalyDetector       anomalyDetector;
     int                   anomalyAlertID;
     unsigned long         sampleCounter;
+    int                   endTaskAlertID = 300000;   // used under dataMutex
+
+    // ---- Password lock (touched only by the UI thread) ----
+    PasswordLock          accessLock;
+    int                   lockAlertID = 400000;      // used under dataMutex
+
+    void pushAccessAlert(const char* severity,
+                         const char* rule,
+                         const std::string& text)
+    {
+        std::lock_guard<std::mutex> guard(dataMutex);
+
+        BackendAlert a;
+        a.id          = lockAlertID++;
+        a.time        = NowTimeOfDay();
+        a.severity    = severity;
+        a.source      = "Access Control";
+        a.rule        = rule;
+        a.description = std::string(rule) + " - " + text;
+
+        alerts.push_front(a);
+
+        if (alerts.size() > MAX_ALERTS)
+            alerts.pop_back();
+    }
+
+    PasswordLock::Result checkPassword(const std::string& password,
+                                       std::string& message)
+    {
+        const PasswordLock::Result r = accessLock.verify(password);
+
+        switch (r)
+        {
+        case PasswordLock::Result::Ok:
+            message.clear();
+            break;
+
+        case PasswordLock::Result::NotSet:
+            message = "No password has been set yet.";
+            break;
+
+        case PasswordLock::Result::LockedOut:
+            message = "Too many wrong attempts. Try again in " +
+                      std::to_string(accessLock.lockoutSecondsLeft()) + " s.";
+            break;
+
+        case PasswordLock::Result::Wrong:
+        {
+            const int wait = accessLock.lockoutSecondsLeft();
+
+            if (wait > 0)
+            {
+                message = "Wrong password. Locked for " +
+                          std::to_string(wait) + " s.";
+
+                pushAccessAlert("High", "Too Many Failed Unlocks",
+                    std::to_string(accessLock.failedAttempts()) +
+                    " wrong password attempts in a row");
+            }
+            else
+            {
+                message = "Wrong password.";
+
+                pushAccessAlert("Medium", "Failed Unlock",
+                    "Wrong password entered for a protected action");
+            }
+
+            break;
+        }
+        }
+
+        return r;
+    }
 
     // ---- File scanner (runs its own thread) ----
     FileScanner           scanner;
@@ -887,12 +1327,62 @@ struct HIDSBackend::Impl
             list.push_back(std::move(row));
         }
  
+        // Mark "apps": processes that own a normal visible window
+        std::map<DWORD, std::string> appWindows;
+        EnumWindows(EnumAppWindowsProc, reinterpret_cast<LPARAM>(&appWindows));
+
+        for (BackendProcess& row : list)
+        {
+            const auto it = appWindows.find(static_cast<DWORD>(row.pid));
+
+            if (it != appWindows.end() &&
+                !IsProtectedProcess(row.name, static_cast<DWORD>(row.pid)))
+            {
+                row.isApp       = true;
+                row.windowTitle = it->second;
+            }
+        }
+
         // Whole-machine CPU / RAM via the System Analysis monitor
         const SystemResourceStats res = resourceMonitor.collect();
         resourceHistory.addSample(res);
  
         // Sustained high CPU / RAM check
         const AnomalyResult anomaly = anomalyDetector.evaluate(res);
+
+        // If the system is overloaded, find the app responsible
+        // (highest CPU when CPU is the bigger problem, else highest memory).
+        // Background / system processes are never offered for ending.
+        bool           hasCulprit = false;
+        BackendProcess culprit;
+
+        if (anomaly.detected)
+        {
+            const bool byCpu = res.cpuPercent >= res.memoryPercent;
+
+            const BackendProcess* best = nullptr;
+
+            for (const BackendProcess& p : list)
+            {
+                if (!p.isApp)
+                    continue;
+
+                if (best == nullptr ||
+                    (byCpu ? p.cpuPercent > best->cpuPercent
+                           : p.memoryMB   > best->memoryMB))
+                {
+                    best = &p;
+                }
+            }
+
+            // Only blame an app that really uses a lot
+            if (best != nullptr &&
+                (byCpu ? best->cpuPercent >= 5.0f : best->memoryMB >= 300.0f))
+            {
+                culprit    = *best;      // copy: 'list' is swapped away below
+                hasCulprit = true;
+            }
+        }
  
         // Run the analysis on the current process list
         std::vector<ProcessSnapshot> snapshots;
@@ -970,6 +1460,22 @@ struct HIDSBackend::Impl
             a.source      = "System Analysis";
             a.rule        = "Resource Anomaly";
             a.description = "Resource Anomaly - " + anomaly.message;
+
+            if (hasCulprit)
+            {
+                char extra[256];
+                std::snprintf(extra, sizeof(extra),
+                    " | Top app: %s (PID %d) - CPU %.0f%%, %.0f MB",
+                    culprit.name.c_str(), culprit.pid,
+                    culprit.cpuPercent, culprit.memoryMB);
+
+                a.description    += extra;
+                a.canEndTask      = true;
+                a.culpritPid      = culprit.pid;
+                a.culpritName     = culprit.name;
+                a.culpritCpu      = culprit.cpuPercent;
+                a.culpritMemoryMB = culprit.memoryMB;
+            }
  
             alerts.push_front(a);
  
@@ -1094,4 +1600,130 @@ bool HIDSBackend::exportScanReport(std::string& outPath) const
 {
     return impl->scanner.exportReport(outPath);
 }
- 
+
+bool HIDSBackend::endTask(int pid, std::string& message, const std::string& expectedName)
+{
+    std::string name;
+    bool isApp = false;
+
+    {
+        std::lock_guard<std::mutex> lock(impl->dataMutex);
+
+        for (const BackendProcess& p : impl->processes)
+        {
+            if (p.pid == pid)
+            {
+                name  = p.name;
+                isApp = p.isApp;
+                break;
+            }
+        }
+    }
+
+    if (name.empty())
+    {
+        message = "That process is no longer running.";
+        return false;
+    }
+
+    // Guard against the PID having been reused by a different program
+    if (!expectedName.empty() && name != expectedName)
+    {
+        message = expectedName + " has already closed.";
+        return false;
+    }
+
+    if (!isApp)
+    {
+        message = name + " is a system or background process and cannot be ended from here.";
+        return false;
+    }
+
+    HANDLE handle = OpenProcess(PROCESS_TERMINATE, FALSE, static_cast<DWORD>(pid));
+
+    if (handle == nullptr)
+    {
+        const DWORD error = GetLastError();
+
+        message = (error == ERROR_ACCESS_DENIED)
+            ? "Access denied for " + name + " - run HIDS as Administrator."
+            : "Could not open " + name + " (error " + std::to_string(error) + ").";
+
+        return false;
+    }
+
+    const BOOL ok = TerminateProcess(handle, 1);
+    CloseHandle(handle);
+
+    if (!ok)
+    {
+        message = "Windows refused to end " + name + ".";
+        return false;
+    }
+
+    message = "Ended " + name + " (PID " + std::to_string(pid) + ").";
+
+    // Leave an audit entry in the Alerts list
+    {
+        std::lock_guard<std::mutex> lock(impl->dataMutex);
+
+        BackendAlert a;
+        a.id          = impl->endTaskAlertID++;
+        a.time        = NowTimeOfDay();
+        a.severity    = "Low";
+        a.source      = "Process Control";
+        a.rule        = "Task Ended";
+        a.description = "Task Ended - " + message;
+
+        impl->alerts.push_front(a);
+
+        if (impl->alerts.size() > MAX_ALERTS)
+            impl->alerts.pop_back();
+    }
+
+    return true;
+}
+
+// ------------------------------------------------------------
+// Password lock
+// ------------------------------------------------------------
+
+bool HIDSBackend::isLockConfigured() const
+{
+    return impl->accessLock.isConfigured();
+}
+
+int HIDSBackend::lockoutSecondsLeft() const
+{
+    return impl->accessLock.lockoutSecondsLeft();
+}
+
+bool HIDSBackend::verifyPassword(const std::string& password, std::string& message)
+{
+    return impl->checkPassword(password, message) == PasswordLock::Result::Ok;
+}
+
+bool HIDSBackend::setPassword(
+    const std::string& newPassword,
+    const std::string& oldPassword,
+    std::string& message)
+{
+    const bool changing = impl->accessLock.isConfigured();
+
+    if (changing &&
+        impl->checkPassword(oldPassword, message) != PasswordLock::Result::Ok)
+    {
+        return false;
+    }
+
+    if (!impl->accessLock.setPassword(newPassword, message))
+        return false;
+
+    message = changing ? "Password changed." : "Password created.";
+
+    impl->pushAccessAlert("Low",
+        changing ? "Password Changed" : "Password Created",
+        "Access password for Logs & Reports and End Task");
+
+    return true;
+}

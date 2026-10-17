@@ -20,6 +20,7 @@ add_executable(HIDS_Dashboard
 
     HIDSBackend.cpp
     FileScanner.cpp
+    PasswordLock.cpp
     Alert.cpp
     Event.cpp
     EventCollector.cpp
