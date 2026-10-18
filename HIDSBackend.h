@@ -83,7 +83,7 @@ public:
     std::vector<BackendEvent>   getEvents() const;
     BackendAnalysis             getAnalysis() const;
 
-    
+    //git 
     bool                        endTask(int pid, std::string& message,
                                 const std::string& expectedName = "");
 
