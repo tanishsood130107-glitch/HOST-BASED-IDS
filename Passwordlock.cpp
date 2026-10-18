@@ -1,5 +1,4 @@
 #include "PasswordLock.h"
-
 #include <chrono>
 #include <cstdint>
 #include <fstream>
@@ -19,11 +18,12 @@ namespace
  
         void reset()
         {
-            static const uint32_t init[8] = {
-                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19 };
+            static const uint32_t init[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19 };
  
-            for (int i = 0; i < 8; ++i) state[i] = init[i];
+            for (int i = 0; i < 8; ++i) 
+            {
+                state[i] = init[i];
+            }
  
             bitLen = 0;
             bufLen = 0;
@@ -54,21 +54,27 @@ namespace
  
             unsigned char zero = 0;
             while (bufLen != 56)
+            {
                 update(&zero, 1);
- 
+            }
             unsigned char lenBytes[8];
             for (int i = 0; i < 8; ++i)
+            {
                 lenBytes[i] = (unsigned char)(totalBits >> (56 - 8 * i));
- 
+            }
             update(lenBytes, 8);
  
             static const char* hex = "0123456789abcdef";
             std::string out;
  
             for (int i = 0; i < 8; ++i)
+            {   
                 for (int shift = 28; shift >= 0; shift -= 4)
-                    out.push_back(hex[(state[i] >> shift) & 0xF]);
- 
+                {
+
+                   out.push_back(hex[(state[i] >> shift) & 0xF]);
+                }
+            }
             return out;
         }
  
@@ -90,8 +96,10 @@ namespace
             uint32_t w[64];
  
             for (int i = 0; i < 16; ++i)
+            {
                 w[i] = ((uint32_t)b[i * 4] << 24) | ((uint32_t)b[i * 4 + 1] << 16) |
-                       ((uint32_t)b[i * 4 + 2] << 8) | (uint32_t)b[i * 4 + 3];
+                    ((uint32_t)b[i * 4 + 2] << 8) | (uint32_t)b[i * 4 + 3];
+            }
  
             for (int i = 16; i < 64; ++i)
             {
@@ -133,7 +141,6 @@ namespace
         return sha.finalHex();
     }
 
-    // Many rounds so guessing offline is slow
     const int ROUNDS = 30000;
 
     std::string Stretch(const std::string& salt, const std::string& password)
@@ -149,12 +156,16 @@ namespace
     bool SameText(const std::string& a, const std::string& b)
     {
         if (a.size() != b.size())
+        {
             return false;
+        }
 
         unsigned char diff = 0;
 
         for (std::size_t i = 0; i < a.size(); ++i)
+        {
             diff |= static_cast<unsigned char>(a[i] ^ b[i]);
+        }
 
         return diff == 0;
     }
@@ -197,14 +208,15 @@ void PasswordLock::load()
     std::string header;
 
     if (!in || !std::getline(in, header) || header != "HIDSLOCK1")
+    { 
         return;
-
+    }
     std::string s, h;
 
     std::getline(in, s);
     std::getline(in, h);
 
-    // trim stray carriage returns
+   
     while (!s.empty() && (s.back() == '\r' || s.back() == ' ')) s.pop_back();
     while (!h.empty() && (h.back() == '\r' || h.back() == ' ')) h.pop_back();
 
@@ -258,7 +270,7 @@ PasswordLock::Result PasswordLock::verify(const std::string& password)
 
     if (failures % 3 == 0)
     {
-        const int level = failures / 3;     // 1, 2, 3, ...
+        const int level = failures / 3;     
         int seconds = 30;
 
         for (int i = 1; i < level && seconds < 300; ++i)
