@@ -4,10 +4,6 @@
 #include <string>
 #include <cstdio>
 
-// ======================================================
-// Constructor
-// ======================================================
-
 LoginMonitor::LoginMonitor()
 {
     lastRecordID = 0;
@@ -15,28 +11,18 @@ LoginMonitor::LoginMonitor()
     initialized = false;
 }
 
-// ======================================================
-// Check for a NEW failed login
-// ======================================================
-
-bool LoginMonitor::checkForLoginFailure(
-    Event& event)
+bool LoginMonitor::checkForLoginFailure(Event& event)
 {
     std::string xml;
 
     unsigned long long recordID = 0;
 
-    // Get latest Windows 4625 event
     if (!getLatestEvent(
             xml,
             recordID))
     {
         return false;
     }
-
-    // ==================================================
-    // First successful check
-    // ==================================================
 
     if (!initialized)
     {
@@ -60,18 +46,10 @@ bool LoginMonitor::checkForLoginFailure(
         return false;
     }
 
-    // ==================================================
-    // Check whether event is new
-    // ==================================================
-
     if (recordID <= lastRecordID)
     {
         return false;
     }
-
-    // ==================================================
-    // NEW failed login
-    // ==================================================
 
     lastRecordID = recordID;
 
@@ -85,8 +63,6 @@ bool LoginMonitor::checkForLoginFailure(
         << recordID
         << std::endl;
 
-    // Create HIDS Event
-
     event = Event(
         static_cast<int>(recordID),
         "LOGIN_FAILURE",
@@ -97,10 +73,6 @@ bool LoginMonitor::checkForLoginFailure(
     return true;
 }
 
-// ======================================================
-// Get latest Windows Event ID 4625
-// ======================================================
-
 bool LoginMonitor::getLatestEvent(
     std::string& xml,
     unsigned long long& recordID)
@@ -108,10 +80,6 @@ bool LoginMonitor::getLatestEvent(
     xml.clear();
 
     recordID = 0;
-
-    // ==================================================
-    // Ask Windows for latest Event ID 4625
-    // ==================================================
 
     const char* command =
         "wevtutil qe Security "
@@ -134,10 +102,6 @@ bool LoginMonitor::getLatestEvent(
 
         return false;
     }
-
-    // ==================================================
-    // Read command output
-    // ==================================================
 
     char buffer[4096];
 
@@ -162,10 +126,6 @@ bool LoginMonitor::getLatestEvent(
 
         return false;
     }
-
-    // ==================================================
-    // Find EventRecordID
-    // ==================================================
 
     const std::string startTag =
         "<EventRecordID>";
@@ -212,10 +172,7 @@ bool LoginMonitor::getLatestEvent(
             end - start
         );
 
-    // ==================================================
-    // Convert Record ID
-    // ==================================================
-
+    
     try
     {
         recordID =
@@ -229,10 +186,6 @@ bool LoginMonitor::getLatestEvent(
 
         return false;
     }
-
-    // ==================================================
-    // Debug information
-    // ==================================================
 
     std::cout
         << "[LoginMonitor] Latest 4625 Record ID: "
