@@ -1,6 +1,3 @@
-
-
-
 #pragma once
  
 #include <cstddef>
@@ -8,17 +5,10 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "FileScanner.h"   //used for scanning the files
+ 
 
-#include "FileScanner.h"   // ScanType, ScanStatus, ScanFinding (no windows.h inside)
- 
-// Plain data structs: no <windows.h> here, so the UI file stays clean.
- 
-struct BackendStats {
-    float         cpuPercent   = 0.0f;
-    float         ramPercent   = 0.0f;
-    int           processCount = 0;
-    unsigned long sample       = 0;     // increases with every new sample
-};
+struct BackendStats {float         cpuPercent   = 0.0f;float         ramPercent   = 0.0f;int           processCount = 0;unsigned long sample       = 0;     };
  
 struct BackendProcess {
     int         pid            = 0;
@@ -26,8 +16,8 @@ struct BackendProcess {
     float       cpuPercent     = 0.0f;
     float       memoryMB       = 0.0f;
     double      runningSeconds = 0.0;
-    bool        isApp          = false;   // has a visible window (like Task Manager "Apps")
-    std::string windowTitle;              // title of that window
+    bool        isApp          = false;  
+    std::string windowTitle;              
 };
  
 struct BackendAlert {
@@ -38,7 +28,7 @@ struct BackendAlert {
     std::string rule;
     std::string description;
 
-    // Resource alerts: the app that is hogging the machine (End Task button)
+   
     bool        canEndTask      = false;
     int         culpritPid      = 0;
     std::string culpritName;
@@ -52,7 +42,6 @@ struct BackendEvent {
     std::string description;
 };
  
-// Result of the System Analysis modules, refreshed every second.
 struct BackendAnalysis {
     bool valid = false;
  
@@ -68,10 +57,10 @@ struct BackendAnalysis {
     std::size_t highCpuProcessCount    = 0;
     std::size_t highMemoryProcessCount = 0;
  
-    std::vector<BackendProcess> topCpuProcesses;   // sorted, top 10
+    std::vector<BackendProcess> topCpuProcesses;   
     std::vector<std::string>    findings;
  
-    std::vector<float> cpuHistory;                 // oldest -> newest
+    std::vector<float> cpuHistory;                 
     std::vector<float> ramHistory;
 };
  
@@ -94,27 +83,24 @@ public:
     std::vector<BackendEvent>   getEvents() const;
     BackendAnalysis             getAnalysis() const;
 
-    // Ends an APP process (one with a visible window). System and
-    // background processes are refused. message receives the result text.
+    
     bool                        endTask(int pid, std::string& message,
                                 const std::string& expectedName = "");
 
-    // ---- Password lock (Logs & Reports, End Task) ----
+    
     bool                        isLockConfigured() const;
     int                         lockoutSecondsLeft() const;
 
-    // Wrong guesses are counted, rate-limited and raised as alerts.
+    
     bool                        verifyPassword(const std::string& password,
                                                std::string& message);
 
-    // Creates the password (oldPassword ignored) or changes it
-    // (oldPassword must be correct).
+    
     bool                        setPassword(const std::string& newPassword,
                                             const std::string& oldPassword,
                                             std::string& message);
 
-    // ---- File scanner ----
-    // startScan returns false if a scan is already running.
+   
     bool                     startScan(ScanType type, const std::string& customPath = "");
     void                     cancelScan();
     bool                     isScanRunning() const;
