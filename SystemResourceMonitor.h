@@ -1,4 +1,3 @@
-
 #pragma once
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -26,11 +25,12 @@ struct SystemResourceStats {
     bool memoryAvailable = false;
 };
 
-class SystemResourceMonitor {
-public:
+class SystemResourceMonitor
+{
+ public:
     SystemResourceStats collect();
 
-private:
+ private:
     ULONGLONG previousIdle_ = 0;
     ULONGLONG previousKernel_ = 0;
     ULONGLONG previousUser_ = 0;
@@ -38,4 +38,4 @@ private:
     bool hasPreviousCpuSample_ = false;
 };
 
-} // namespace hids_analysis
+}
