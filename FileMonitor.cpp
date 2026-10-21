@@ -72,9 +72,6 @@ bool FileMonitor::checkForFileChange(
                 timeValue;
         }
 
-        // ==================================================
-        // First scan
-        // ==================================================
 
         if (!initialized)
         {
