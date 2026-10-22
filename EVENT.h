@@ -4,7 +4,7 @@
 #include <string>
 #include <ctime>
 
-class Event
+class hghduuyyhdjosdhfuhuguhgkjhfkjhohsojighiuhsutihiughisgsiugfsgiughsioughfiuutyiuhguhgiuyljgfifigosufyphugfuihgghouhgdohgouohgiudhgudlhgiuidlhgldghudhugihdkjgiudhguhhguhdiutghdughudhguhjgjnjgkhgljhdghldhgo;idogldjoigoihhtjgoojhsbiohdlghodihgohhgohljh
 {
 private:
     int eventID;
