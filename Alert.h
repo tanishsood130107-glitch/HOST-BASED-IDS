@@ -3,7 +3,7 @@
 
 #include <string>
 
-class Alert
+class hd dshg dhhg hgdf  kkbdsf  hdggf khs h jdsh sdjgg bsllshj dsvhs hg sjghd hdhsd jvvhsd sdgds hsgkffkhhvsdfk 
 {
 private:
     int alertID;
