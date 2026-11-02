@@ -1,24 +1,1995 @@
+// #include "HIDSBackend.h"
+ 
+// #include "Alert.h"
+// #include "Event.h"
+// #include "EventCollector.h"
+// #include "EventFilter.h"
+// #include "FileMonitor.h"
+// #include "LoginMonitor.h"
+// #include "OngoingProcessMonitor.h"   
+// #include "ProcessMonitor.h"
+// #include "PasswordLock.h"
+// #include "Rule.h"
+// #include "RuleEngine.h"
+ 
+
+// #include "AnomalyDetector.h"
+// #include "ResourceHistory.h"
+// #include "SystemAnalysis.h"
+// #include "SystemResourceMonitor.h"
+ 
+// #include <windows.h>
+ 
+// #include <algorithm>
+// #include <atomic>
+// #include <cctype>
+// #include <chrono>
+// #include <cstdio>
+// #include <deque>
+// #include <map>
+// #include <mutex>
+// #include <thread>
+ 
+
+// using hids_analysis::AnomalyDetector;
+// using hids_analysis::AnomalyResult;
+// using hids_analysis::ProcessSnapshot;
+// using hids_analysis::ResourceHistory;
+// using hids_analysis::SystemAnalysis;
+// using hids_analysis::SystemAnalysisReport;
+// using hids_analysis::SystemResourceMonitor;
+// using hids_analysis::SystemResourceStats;
+ 
+
+ 
+// namespace
+// {
+//     const char* const WATCHED_DIRECTORY = "HIDS_Monitor";
+ 
+//     const std::size_t MAX_ALERTS = 200;
+//     const std::size_t MAX_EVENTS = 500;
+ 
+//     const int EVENT_POLL_MS = 2000;   
+//     const int STATS_POLL_MS = 1000;   
+    
+//     std::string TitleCase(std::string text)
+//     {
+//         for (std::size_t i = 0; i < text.size(); ++i)
+//         {
+//             const unsigned char c = static_cast<unsigned char>(text[i]);
+//             text[i] = static_cast<char>(i == 0 ? std::toupper(c) : std::tolower(c));
+//         }
+ 
+//         return text;
+//     }
+ 
+//     std::string SourceForEventType(const std::string& type)
+//     {
+//         if (type == "LOGIN_FAILURE")        return "Login Monitor";
+//         if (type == "PROCESS_START")        return "Process Monitor";
+//         if (type.rfind("FILE_", 0) == 0)    return "File Monitor";
+ 
+//         return "HIDS";
+//     }
+ 
+   
+//     std::string TimeOfDay(const std::string& timestamp)
+//     {
+//         return timestamp.size() >= 19 ? timestamp.substr(11, 8) : timestamp;
+//     }
+ 
+   
+
+//     BOOL CALLBACK EnumAppWindowsProc(HWND hwnd, LPARAM lParam)
+//     {
+//         if (!IsWindowVisible(hwnd))
+//             return TRUE;
+
+//         if (GetWindow(hwnd, GW_OWNER) != nullptr)          // owned popups
+//             return TRUE;
+
+//         if (GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW)
+//             return TRUE;
+
+//         wchar_t title[256];
+//         const int n = GetWindowTextW(hwnd, title, 256);
+
+//         if (n <= 0)
+//             return TRUE;
+
+//         DWORD pid = 0;
+//         GetWindowThreadProcessId(hwnd, &pid);
+
+//         std::map<DWORD, std::string>* out =
+//             reinterpret_cast<std::map<DWORD, std::string>*>(lParam);
+
+//         if (out->find(pid) != out->end())
+//             return TRUE;                                   
+//         char utf8[768];
+//         const int len = WideCharToMultiByte(
+//             CP_UTF8, 0, title, n, utf8, (int)sizeof(utf8), nullptr, nullptr);
+
+//         if (len > 0)
+//             (*out)[pid] = std::string(utf8, (std::size_t)len);
+
+//         return TRUE;
+//     }
+
+    
+//     bool IsProtectedProcess(const std::string& name, DWORD pid)
+//     {
+//         if (pid <= 4 || pid == GetCurrentProcessId())
+//             return true;
+
+//         std::string lower = name;
+//         for (char& c : lower)
+//             c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+//         static const char* const PROTECTED_NAMES[] = {
+//             "system", "registry", "smss.exe", "csrss.exe", "wininit.exe",
+//             "winlogon.exe", "services.exe", "lsass.exe", "dwm.exe",
+//             "explorer.exe", "applicationframehost.exe", "textinputhost.exe",
+//             "searchhost.exe", "startmenuexperiencehost.exe",
+//             "shellexperiencehost.exe", "sihost.exe", "taskhostw.exe",
+//             "fontdrvhost.exe"
+//         };
+
+//         for (const char* p : PROTECTED_NAMES)
+//             if (lower == p)
+//                 return true;
+
+//         return false;
+//     }
+
+    
+//     std::string NowTimeOfDay()
+//     {
+//         SYSTEMTIME st{};
+//         GetLocalTime(&st);
+ 
+//         char text[16];
+//         std::snprintf(text, sizeof(text), "%02d:%02d:%02d",
+//                       static_cast<int>(st.wHour),
+//                       static_cast<int>(st.wMinute),
+//                       static_cast<int>(st.wSecond));
+ 
+//         return text;
+//     }
+// }
+ 
+
+ 
+// struct HIDSBackend::Impl
+// {
+    
+//     EventCollector collector;
+//     EventFilter    filter;
+//     RuleEngine     ruleEngine;
+//     LoginMonitor   loginMonitor;
+//     ProcessMonitor processMonitor;
+//     FileMonitor    fileMonitor;
+//     int            nextAlertID;
+ 
+//     OngoingProcessMonitor processSampler;
+//     SystemResourceMonitor resourceMonitor;
+//     ResourceHistory       resourceHistory;
+//     SystemAnalysis        analysisEngine;
+//     AnomalyDetector       anomalyDetector;
+//     int                   anomalyAlertID;
+//     unsigned long         sampleCounter;
+//     int                   endTaskAlertID = 300000;   
+
+    
+//     PasswordLock          accessLock;
+//     int                   lockAlertID = 400000;      
+//     void pushAccessAlert(const char* severity,
+//                          const char* rule,
+//                          const std::string& text)
+//     {
+//         std::lock_guard<std::mutex> guard(dataMutex);
+
+//         BackendAlert a;
+//         a.id          = lockAlertID++;
+//         a.time        = NowTimeOfDay();
+//         a.severity    = severity;
+//         a.source      = "Access Control";
+//         a.rule        = rule;
+//         a.description = std::string(rule) + " - " + text;
+
+//         alerts.push_front(a);
+
+//         if (alerts.size() > MAX_ALERTS)
+//             alerts.pop_back();
+//     }
+
+//     PasswordLock::Result checkPassword(const std::string& password,
+//                                        std::string& message)
+//     {
+//         const PasswordLock::Result r = accessLock.verify(password);
+
+//         switch (r)
+//         {
+//         case PasswordLock::Result::Ok:
+//             message.clear();
+//             break;
+
+//         case PasswordLock::Result::NotSet:
+//             message = "No password has been set yet.";
+//             break;
+
+//         case PasswordLock::Result::LockedOut:
+//             message = "Too many wrong attempts. Try again in " +
+//                       std::to_string(accessLock.lockoutSecondsLeft()) + " s.";
+//             break;
+
+//         case PasswordLock::Result::Wrong:
+//         {
+//             const int wait = accessLock.lockoutSecondsLeft();
+
+//             if (wait > 0)
+//             {
+//                 message = "Wrong password. Locked for " +
+//                           std::to_string(wait) + " s.";
+
+//                 pushAccessAlert("High", "Too Many Failed Unlocks",
+//                     std::to_string(accessLock.failedAttempts()) +
+//                     " wrong password attempts in a row");
+//             }
+//             else
+//             {
+//                 message = "Wrong password.";
+
+//                 pushAccessAlert("Medium", "Failed Unlock",
+//                     "Wrong password entered for a protected action");
+//             }
+
+//             break;
+//         }
+//         }
+
+//         return r;
+//     }
+
+    
+//     FileScanner           scanner;
+//     std::mutex            scanMutex;            
+//     std::size_t           scanAlertsSeen = 0;   
+//     int                   scanAlertID    = 200000;
+ 
+    
+//     std::atomic<bool> running;
+//     std::thread eventThread;
+//     std::thread statsThread;
+ 
+//      mutable std::mutex dataMutex;
+//     BackendStats stats;
+//     BackendAnalysis analysis;
+//     std::vector<BackendProcess> processes;
+//     std::deque<BackendAlert> alerts;
+//     std::deque<BackendEvent> events;
+ 
+//     Impl()
+//         : fileMonitor(WATCHED_DIRECTORY),
+//           nextAlertID(1),
+//           resourceHistory(60),
+//           anomalyAlertID(100000),
+//           sampleCounter(0),
+//           running(false)
+//     {
+//         addRules();
+//     }
+ 
+    
+//     void addRules()
+//     {
+//         ruleEngine.addRule(Rule(
+//             1, "Multiple Failed Logins", "LOGIN_FAILURE", 2, "HIGH"));
+ 
+//         ruleEngine.addRule(Rule(
+//             2, "Suspicious PowerShell Process", "PROCESS_START", 1, "HIGH",
+//             "powershell.exe"));
+ 
+//         ruleEngine.addRule(Rule(
+//             3, "Suspicious Script File", "FILE_CREATED", 1, "HIGH",
+//             ".ps1"));
+//     }
+ 
+    
+//     void resetPipeline()
+//     {
+//         collector      = EventCollector();
+//         ruleEngine     = RuleEngine();
+//         loginMonitor   = LoginMonitor();
+//         processMonitor = ProcessMonitor();
+//         fileMonitor    = FileMonitor(WATCHED_DIRECTORY);
+//         processSampler = OngoingProcessMonitor();
+ 
+//         resourceMonitor = SystemResourceMonitor();
+//         resourceHistory.clear();
+//         anomalyDetector.reset();
+ 
+//         {
+//             std::lock_guard<std::mutex> lock(dataMutex);
+//             analysis = BackendAnalysis();
+//         }
+ 
+//         addRules();
+//     }
+ 
+//     void joinThreads()
+//     {
+//         if (eventThread.joinable()) eventThread.join();
+//         if (statsThread.joinable()) statsThread.join();
+//     }
+ 
+    
+//     void sleepWhileRunning(int milliseconds)
+//     {
+//         for (int waited = 0; waited < milliseconds && running; waited += 100)
+//             std::this_thread::sleep_for(std::chrono::milliseconds(100));
+//     }
+ 
+   
+ 
+//     void eventLoop()
+//     {
+//         while (running)
+//         {
+//             pollMonitors();
+//             drainEvents();
+//             pollScanner();
+ 
+//             sleepWhileRunning(EVENT_POLL_MS);
+//         }
+//     }
+ 
+//     void pollMonitors()
+//     {
+//         Event loginEvent;
+//         if (loginMonitor.checkForLoginFailure(loginEvent))
+//             collector.addEvent(loginEvent);
+ 
+//         Event processEvent;
+//         if (processMonitor.checkForNewProcess(processEvent))
+//             collector.addEvent(processEvent);
+ 
+//         Event fileEvent;
+//         if (fileMonitor.checkForFileChange(fileEvent))
+//             collector.addEvent(fileEvent);
+//     }
+ 
+//     void drainEvents()
+//     {
+//         while (collector.hasEvents())
+//         {
+//             const Event event = collector.getNextEvent();
+ 
+//             if (!filter.isRelevant(event))
+//                 continue;
+ 
+//             recordEvent(event);
+ 
+//             std::string matchedRule;
+//             std::string severity;
+ 
+//             if (ruleEngine.checkEvent(event, matchedRule, severity))
+//                 recordAlert(event, matchedRule, severity);
+//         }
+//     }
+ 
+    
+//     void pollScanner()
+//     {
+//         std::lock_guard<std::mutex> scanLock(scanMutex);
+
+//         const std::vector<ScanFinding> findings = scanner.getFindings();
+
+//         if (findings.size() < scanAlertsSeen)   
+//             scanAlertsSeen = 0;
+
+//         if (findings.size() == scanAlertsSeen)
+//             return;
+
+//         std::lock_guard<std::mutex> lock(dataMutex);
+
+//         for (std::size_t i = scanAlertsSeen; i < findings.size(); ++i)
+//         {
+//             const ScanFinding& f = findings[i];
+
+//             BackendAlert a;
+//             a.id          = scanAlertID++;
+//             a.time        = f.time.empty() ? NowTimeOfDay() : f.time;
+//             a.severity    = (f.level == "Malicious") ? "Critical" : "Medium";
+//             a.source      = "File Scanner";
+//             a.rule        = f.name;
+//             a.description = f.name + " - " + f.path + " (" + f.reason + ")";
+
+//             alerts.push_front(a);
+
+//             if (alerts.size() > MAX_ALERTS)
+//                 alerts.pop_back();
+//         }
+
+//         scanAlertsSeen = findings.size();
+//     }
+
+  
+//     void recordEvent(const Event& event)
+//     {
+//         const std::string type = event.getEventType();
+ 
+//         if (type.rfind("LOGIN_", 0) != 0 && type.rfind("FILE_", 0) != 0)
+//             return;
+ 
+//         BackendEvent record;
+//         record.time        = event.getTimestamp();
+//         record.type        = type;
+//         record.description = event.getDescription();
+ 
+//         std::lock_guard<std::mutex> lock(dataMutex);
+ 
+//         events.push_front(record);
+ 
+//         if (events.size() > MAX_EVENTS)
+//             events.pop_back();
+//     }
+ 
+//     void recordAlert(
+//         const Event& event,
+//         const std::string& matchedRule,
+//         const std::string& severity)
+//     {
+//         const Alert alert(
+//             nextAlertID++,
+//             TitleCase(severity),
+//             matchedRule,
+//             event.getDescription(),
+//             SourceForEventType(event.getEventType()),
+//             event.getTimestamp()
+//         );
+ 
+//         BackendAlert record;
+//         record.id          = alert.getID();
+//         record.time        = TimeOfDay(alert.getTimestamp());
+//         record.severity    = alert.getSeverity();
+//         record.source      = alert.getSource();
+//         record.rule        = alert.getRuleName();
+//         record.description = alert.getRuleName() + " - " + alert.getMessage();
+ 
+//         std::lock_guard<std::mutex> lock(dataMutex);
+ 
+//         alerts.push_front(record);
+ 
+//         if (alerts.size() > MAX_ALERTS)
+//             alerts.pop_back();
+//     }
+ 
+//     //hello
+    
+//     void statsLoop()
+//     {
+//         while (running)
+//         {
+//             sampleSystem();
+ 
+//             sleepWhileRunning(STATS_POLL_MS);
+//         }
+//     }
+ 
+//     void sampleSystem()
+//     {
+        
+//         const std::vector<OngoingProcessInfo> raw =
+//             processSampler.collectProcesses();
+ 
+//         std::vector<BackendProcess> list;
+//         list.reserve(raw.size());
+ 
+//         for (const OngoingProcessInfo& p : raw)
+//         {
+//             BackendProcess row;
+ 
+//             row.pid  = static_cast<int>(p.pid);
+//             row.name = p.name.empty() ? "Unknown" : p.name;
+ 
+//             row.cpuPercent = p.cpuAvailable
+//                 ? static_cast<float>(p.cpuPercent) : 0.0f;
+ 
+//             row.memoryMB = p.memoryAvailable
+//                 ? static_cast<float>(p.memoryMB) : 0.0f;
+ 
+//             row.runningSeconds = p.startTimeAvailable
+//                 ? p.runningSeconds : 0.0;
+ 
+//             list.push_back(std::move(row));
+//         }
+ 
+        
+//         std::map<DWORD, std::string> appWindows;
+//         EnumWindows(EnumAppWindowsProc, reinterpret_cast<LPARAM>(&appWindows));
+
+//         for (BackendProcess& row : list)
+//         {
+//             const auto it = appWindows.find(static_cast<DWORD>(row.pid));
+
+//             if (it != appWindows.end() &&
+//                 !IsProtectedProcess(row.name, static_cast<DWORD>(row.pid)))
+//             {
+//                 row.isApp       = true;
+//                 row.windowTitle = it->second;
+//             }
+//         }
+
+        
+//         const SystemResourceStats res = resourceMonitor.collect();
+//         resourceHistory.addSample(res);
+ 
+    
+//         const AnomalyResult anomaly = anomalyDetector.evaluate(res);
+
+        
+//         bool           hasCulprit = false;
+//         BackendProcess culprit;
+
+//         if (anomaly.detected)
+//         {
+//             const bool byCpu = res.cpuPercent >= res.memoryPercent;
+
+//             const BackendProcess* best = nullptr;
+
+//             for (const BackendProcess& p : list)
+//             {
+//                 if (!p.isApp)
+//                     continue;
+
+//                 if (best == nullptr ||
+//                     (byCpu ? p.cpuPercent > best->cpuPercent
+//                            : p.memoryMB   > best->memoryMB))
+//                 {
+//                     best = &p;
+//                 }
+//             }
+
+            
+//             if (best != nullptr &&
+//                 (byCpu ? best->cpuPercent >= 5.0f : best->memoryMB >= 300.0f))
+//             {
+//                 culprit    = *best;     
+//                 hasCulprit = true;
+//             }
+//         }
+ 
+        
+//         std::vector<ProcessSnapshot> snapshots;
+//         snapshots.reserve(list.size());
+ 
+//         for (const BackendProcess& p : list)
+//         {
+//             ProcessSnapshot s;
+//             s.pid        = static_cast<unsigned long>(p.pid);
+//             s.name       = p.name;
+//             s.cpuPercent = p.cpuPercent;
+//             s.memoryMB   = p.memoryMB;
+//             snapshots.push_back(std::move(s));
+//         }
+ 
+//         const SystemAnalysisReport report =
+//             analysisEngine.analyze(res, snapshots);
+ 
+//         BackendAnalysis out;
+//         out.valid                  = true;
+//         out.cpuPercent             = res.cpuPercent;
+//         out.memoryPercent          = res.memoryPercent;
+//         out.totalMemoryMB          = res.totalMemoryMB;
+//         out.usedMemoryMB           = res.usedMemoryMB;
+//         out.availableMemoryMB      = res.availableMemoryMB;
+//         out.cpuAvailable           = res.cpuAvailable;
+//         out.memoryAvailable        = res.memoryAvailable;
+//         out.processCount           = report.processCount;
+//         out.highCpuProcessCount    = report.highCpuProcessCount;
+//         out.highMemoryProcessCount = report.highMemoryProcessCount;
+//         out.findings               = report.findings;
+ 
+//         const std::size_t topN =
+//             std::min<std::size_t>(10, report.topCpuProcesses.size());
+ 
+//         for (std::size_t i = 0; i < topN; ++i)
+//         {
+//             const ProcessSnapshot& s = report.topCpuProcesses[i];
+ 
+//             BackendProcess row;
+//             row.pid            = static_cast<int>(s.pid);
+//             row.name           = s.name;
+//             row.cpuPercent     = static_cast<float>(s.cpuPercent);
+//             row.memoryMB       = static_cast<float>(s.memoryMB);
+//             row.runningSeconds = 0.0;
+ 
+//             out.topCpuProcesses.push_back(std::move(row));
+//         }
+ 
+//         for (const SystemResourceStats& h : resourceHistory.getSamples())
+//         {
+//             out.cpuHistory.push_back(static_cast<float>(h.cpuPercent));
+//             out.ramHistory.push_back(static_cast<float>(h.memoryPercent));
+//         }
+ 
+    
+//         std::lock_guard<std::mutex> lock(dataMutex);
+ 
+//         stats.cpuPercent   = static_cast<float>(res.cpuPercent);
+//         stats.ramPercent   = static_cast<float>(res.memoryPercent);
+//         stats.processCount = static_cast<int>(list.size());
+//         stats.sample       = ++sampleCounter;
+ 
+//         processes.swap(list);
+//         analysis = std::move(out);
+ 
+        
+//         if (anomaly.detected)
+//         {
+//             BackendAlert a;
+//             a.id          = anomalyAlertID++;
+//             a.time        = NowTimeOfDay();
+//             a.severity    = "Medium";
+//             a.source      = "System Analysis";
+//             a.rule        = "Resource Anomaly";
+//             a.description = "Resource Anomaly - " + anomaly.message;
+
+//             if (hasCulprit)
+//             {
+//                 char extra[256];
+//                 std::snprintf(extra, sizeof(extra),
+//                     " | Top app: %s (PID %d) - CPU %.0f%%, %.0f MB",
+//                     culprit.name.c_str(), culprit.pid,
+//                     culprit.cpuPercent, culprit.memoryMB);
+
+//                 a.description    += extra;
+//                 a.canEndTask      = true;
+//                 a.culpritPid      = culprit.pid;
+//                 a.culpritName     = culprit.name;
+//                 a.culpritCpu      = culprit.cpuPercent;
+//                 a.culpritMemoryMB = culprit.memoryMB;
+//             }
+ 
+//             alerts.push_front(a);
+ 
+//             if (alerts.size() > MAX_ALERTS)
+//                 alerts.pop_back();
+//         }
+//     }
+// };
+ 
+ 
+// HIDSBackend::HIDSBackend()
+//     : impl(new Impl())
+// {
+// }
+ 
+// HIDSBackend::~HIDSBackend()
+// {
+//     shutdown();
+// }
+ 
+// void HIDSBackend::start()
+// {
+//     if (impl->running)
+//         return;
+ 
+//     // A previous run may still be finishing its last cycle
+//     impl->joinThreads();
+//     impl->resetPipeline();
+ 
+//     impl->running = true;
+ 
+//     impl->eventThread = std::thread(&Impl::eventLoop, impl.get());
+//     impl->statsThread = std::thread(&Impl::statsLoop, impl.get());
+// }
+ 
+// void HIDSBackend::stop()
+// {
+//     impl->running = false;
+// }
+ 
+// void HIDSBackend::shutdown()
+// {
+//     impl->running = false;
+//     impl->scanner.shutdown();
+//     impl->joinThreads();
+// }
+ 
+// bool HIDSBackend::isRunning() const
+// {
+//     return impl->running;
+// }
+ 
+// BackendStats HIDSBackend::getStats() const
+// {
+//     std::lock_guard<std::mutex> lock(impl->dataMutex);
+//     return impl->stats;
+// }
+ 
+// std::vector<BackendProcess> HIDSBackend::getProcesses() const
+// {
+//     std::lock_guard<std::mutex> lock(impl->dataMutex);
+//     return impl->processes;
+// }
+ 
+// std::vector<BackendAlert> HIDSBackend::getAlerts() const
+// {
+//     std::lock_guard<std::mutex> lock(impl->dataMutex);
+//     return std::vector<BackendAlert>(impl->alerts.begin(), impl->alerts.end());
+// }
+ 
+// std::vector<BackendEvent> HIDSBackend::getEvents() const
+// {
+//     std::lock_guard<std::mutex> lock(impl->dataMutex);
+//     return std::vector<BackendEvent>(impl->events.begin(), impl->events.end());
+// }
+ 
+// BackendAnalysis HIDSBackend::getAnalysis() const
+// {
+//     std::lock_guard<std::mutex> lock(impl->dataMutex);
+//     return impl->analysis;
+// }
+
+
+// bool HIDSBackend::startScan(ScanType type, const std::string& customPath)
+// {
+//     std::lock_guard<std::mutex> lock(impl->scanMutex);
+
+//     if (!impl->scanner.start(type, customPath))
+//         return false;
+
+//     impl->scanAlertsSeen = 0;   
+//     return true;
+// }
+
+// void HIDSBackend::cancelScan()
+// {
+//     impl->scanner.cancel();
+// }
+
+// bool HIDSBackend::isScanRunning() const
+// {
+//     return impl->scanner.isRunning();
+// }
+
+// ScanStatus HIDSBackend::getScanStatus() const
+// {
+//     return impl->scanner.getStatus();
+// }
+
+// std::vector<ScanFinding> HIDSBackend::getScanFindings() const
+// {
+//     return impl->scanner.getFindings();
+// }
+
+// bool HIDSBackend::exportScanReport(std::string& outPath) const
+// {
+//     return impl->scanner.exportReport(outPath);
+// }
+
+// bool HIDSBackend::endTask(int pid, std::string& message, const std::string& expectedName)
+// {
+//     std::string name;
+//     bool isApp = false;
+
+//     {
+//         std::lock_guard<std::mutex> lock(impl->dataMutex);
+
+//         for (const BackendProcess& p : impl->processes)
+//         {
+//             if (p.pid == pid)
+//             {
+//                 name  = p.name;
+//                 isApp = p.isApp;
+//                 break;
+//             }
+//         }
+//     }
+
+//     if (name.empty())
+//     {
+//         message = "That process is no longer running.";
+//         return false;
+//     }
+
+    
+//     if (!expectedName.empty() && name != expectedName)
+//     {
+//         message = expectedName + " has already closed.";
+//         return false;
+//     }
+
+//     if (!isApp)
+//     {
+//         message = name + " is a system or background process and cannot be ended from here.";
+//         return false;
+//     }
+
+//     HANDLE handle = OpenProcess(PROCESS_TERMINATE, FALSE, static_cast<DWORD>(pid));
+
+//     if (handle == nullptr)
+//     {
+//         const DWORD error = GetLastError();
+
+//         message = (error == ERROR_ACCESS_DENIED)
+//             ? "Access denied for " + name + " - run HIDS as Administrator."
+//             : "Could not open " + name + " (error " + std::to_string(error) + ").";
+
+//         return false;
+//     }
+
+//     const BOOL ok = TerminateProcess(handle, 1);
+//     CloseHandle(handle);
+
+//     if (!ok)
+//     {
+//         message = "Windows refused to end " + name + ".";
+//         return false;
+//     }
+
+//     message = "Ended " + name + " (PID " + std::to_string(pid) + ").";
+
+    
+//     {
+//         std::lock_guard<std::mutex> lock(impl->dataMutex);
+
+//         BackendAlert a;
+//         a.id          = impl->endTaskAlertID++;
+//         a.time        = NowTimeOfDay();
+//         a.severity    = "Low";
+//         a.source      = "Process Control";
+//         a.rule        = "Task Ended";
+//         a.description = "Task Ended - " + message;
+
+//         impl->alerts.push_front(a);
+
+//         if (impl->alerts.size() > MAX_ALERTS)
+//             impl->alerts.pop_back();
+//     }
+
+//     return true;
+// }
+
+
+
+// bool HIDSBackend::isLockConfigured() const
+// {
+//     return impl->accessLock.isConfigured();
+// }
+
+// int HIDSBackend::lockoutSecondsLeft() const
+// {
+//     return impl->accessLock.lockoutSecondsLeft();
+// }
+
+// bool HIDSBackend::verifyPassword(const std::string& password, std::string& message)
+// {
+//     return impl->checkPassword(password, message) == PasswordLock::Result::Ok;
+// }
+
+// bool HIDSBackend::setPassword(
+//     const std::string& newPassword,
+//     const std::string& oldPassword,
+//     std::string& message)
+// {
+//     const bool changing = impl->accessLock.isConfigured();
+
+//     if (changing &&
+//         impl->checkPassword(oldPassword, message) != PasswordLock::Result::Ok)
+//     {
+//         return false;
+//     }
+
+//     if (!impl->accessLock.setPassword(newPassword, message))
+//         return false;
+
+//     message = changing ? "Password changed." : "Password created.";
+
+//     impl->pushAccessAlert("Low",
+//         changing ? "Password Changed" : "Password Created",
+//         "Access password for Logs & Reports and End Task");
+
+//     return true;
+// }
+
+
+
+
+// #include "HIDSBackend.h"
+ 
+// #include "Alert.h"
+// #include "DesktopNotifier.h"
+// #include "Event.h"
+// #include "EventCollector.h"
+// #include "EventFilter.h"
+// #include "FileMonitor.h"
+// #include "LoginMonitor.h"
+// #include "OngoingProcessMonitor.h"
+// #include "ProcessMonitor.h"
+// #include "PasswordLock.h"
+// #include "Rule.h"
+// #include "RuleEngine.h"
+ 
+// #include "AnomalyDetector.h"
+// #include "ResourceHistory.h"
+// #include "SystemAnalysis.h"
+// #include "SystemResourceMonitor.h"
+ 
+// #include <windows.h>
+// #include <shellapi.h>
+ 
+// #include <algorithm>
+// #include <atomic>
+// #include <cctype>
+// #include <chrono>
+// #include <cstdio>
+// #include <deque>
+// #include <map>
+// #include <memory>
+// #include <mutex>
+// #include <string>
+// #include <thread>
+ 
+ 
+// using hids_analysis::AnomalyDetector;
+// using hids_analysis::AnomalyResult;
+// using hids_analysis::ProcessSnapshot;
+// using hids_analysis::ResourceHistory;
+// using hids_analysis::SystemAnalysis;
+// using hids_analysis::SystemAnalysisReport;
+// using hids_analysis::SystemResourceMonitor;
+// using hids_analysis::SystemResourceStats;
+ 
+ 
+ 
+// namespace
+// {
+//     const char* const WATCHED_DIRECTORY = "HIDS_Monitor";
+ 
+//     const std::size_t MAX_ALERTS = 200;
+//     const std::size_t MAX_EVENTS = 500;
+ 
+//     const int EVENT_POLL_MS = 2000;
+//     const int STATS_POLL_MS = 1000;
+ 
+//     std::string TitleCase(std::string text)
+//     {
+//         for (std::size_t i = 0; i < text.size(); ++i)
+//         {
+//             const unsigned char c = static_cast<unsigned char>(text[i]);
+//             text[i] = static_cast<char>(i == 0 ? std::toupper(c) : std::tolower(c));
+//         }
+ 
+//         return text;
+//     }
+ 
+//     std::string SourceForEventType(const std::string& type)
+//     {
+//         if (type == "LOGIN_FAILURE")        return "Login Monitor";
+//         if (type == "PROCESS_START")        return "Process Monitor";
+//         if (type.rfind("FILE_", 0) == 0)    return "File Monitor";
+ 
+//         return "HIDS";
+//     }
+ 
+ 
+//     std::string TimeOfDay(const std::string& timestamp)
+//     {
+//         return timestamp.size() >= 19 ? timestamp.substr(11, 8) : timestamp;
+//     }
+ 
+ 
+//     // ---- Desktop notification helpers ----
+ 
+//     int SeverityRank(const std::string& s)
+//     {
+//         if (s == "Critical") return 3;
+//         if (s == "High")     return 2;
+//         if (s == "Medium")   return 1;
+//         return 0;
+//     }
+ 
+//     std::wstring Utf8ToWide(const std::string& s)
+//     {
+//         if (s.empty())
+//             return std::wstring();
+ 
+//         const int n = MultiByteToWideChar(
+//             CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
+ 
+//         if (n <= 0)
+//             return std::wstring();
+ 
+//         std::wstring w((std::size_t)n, L'\0');
+ 
+//         MultiByteToWideChar(
+//             CP_UTF8, 0, s.data(), (int)s.size(), &w[0], n);
+ 
+//         return w;
+//     }
+ 
+//     DWORD IconForSeverity(const std::string& s)
+//     {
+//         const int r = SeverityRank(s);
+ 
+//         if (r >= 3) return NIIF_ERROR;
+//         if (r >= 1) return NIIF_WARNING;
+ 
+//         return NIIF_INFO;
+//     }
+ 
+ 
+//     BOOL CALLBACK EnumAppWindowsProc(HWND hwnd, LPARAM lParam)
+//     {
+//         if (!IsWindowVisible(hwnd))
+//             return TRUE;
+ 
+//         if (GetWindow(hwnd, GW_OWNER) != nullptr)          // owned popups
+//             return TRUE;
+ 
+//         if (GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW)
+//             return TRUE;
+ 
+//         wchar_t title[256];
+//         const int n = GetWindowTextW(hwnd, title, 256);
+ 
+//         if (n <= 0)
+//             return TRUE;
+ 
+//         DWORD pid = 0;
+//         GetWindowThreadProcessId(hwnd, &pid);
+ 
+//         std::map<DWORD, std::string>* out =
+//             reinterpret_cast<std::map<DWORD, std::string>*>(lParam);
+ 
+//         if (out->find(pid) != out->end())
+//             return TRUE;
+ 
+//         char utf8[768];
+//         const int len = WideCharToMultiByte(
+//             CP_UTF8, 0, title, n, utf8, (int)sizeof(utf8), nullptr, nullptr);
+ 
+//         if (len > 0)
+//             (*out)[pid] = std::string(utf8, (std::size_t)len);
+ 
+//         return TRUE;
+//     }
+ 
+ 
+//     bool IsProtectedProcess(const std::string& name, DWORD pid)
+//     {
+//         if (pid <= 4 || pid == GetCurrentProcessId())
+//             return true;
+ 
+//         std::string lower = name;
+//         for (char& c : lower)
+//             c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+ 
+//         static const char* const PROTECTED_NAMES[] = {
+//             "system", "registry", "smss.exe", "csrss.exe", "wininit.exe",
+//             "winlogon.exe", "services.exe", "lsass.exe", "dwm.exe",
+//             "explorer.exe", "applicationframehost.exe", "textinputhost.exe",
+//             "searchhost.exe", "startmenuexperiencehost.exe",
+//             "shellexperiencehost.exe", "sihost.exe", "taskhostw.exe",
+//             "fontdrvhost.exe"
+//         };
+ 
+//         for (const char* p : PROTECTED_NAMES)
+//             if (lower == p)
+//                 return true;
+ 
+//         return false;
+//     }
+ 
+ 
+//     std::string NowTimeOfDay()
+//     {
+//         SYSTEMTIME st{};
+//         GetLocalTime(&st);
+ 
+//         char text[16];
+//         std::snprintf(text, sizeof(text), "%02d:%02d:%02d",
+//                       static_cast<int>(st.wHour),
+//                       static_cast<int>(st.wMinute),
+//                       static_cast<int>(st.wSecond));
+ 
+//         return text;
+//     }
+// }
+ 
+ 
+ 
+// struct HIDSBackend::Impl
+// {
+ 
+//     EventCollector collector;
+//     EventFilter    filter;
+//     RuleEngine     ruleEngine;
+//     LoginMonitor   loginMonitor;
+//     ProcessMonitor processMonitor;
+//     FileMonitor    fileMonitor;
+//     int            nextAlertID;
+ 
+//     OngoingProcessMonitor processSampler;
+//     SystemResourceMonitor resourceMonitor;
+//     ResourceHistory       resourceHistory;
+//     SystemAnalysis        analysisEngine;
+//     AnomalyDetector       anomalyDetector;
+//     int                   anomalyAlertID;
+//     unsigned long         sampleCounter;
+//     int                   endTaskAlertID = 300000;
+ 
+ 
+//     PasswordLock          accessLock;
+//     int                   lockAlertID = 400000;
+ 
+//     // ---------------- Desktop notifications ----------------
+//     struct PendingNotice
+//     {
+//         std::wstring title;
+//         std::wstring message;
+//         DWORD        icon = NIIF_INFO;
+//     };
+ 
+//     std::unique_ptr<DesktopNotifier> notifier;          // UI thread only
+//     std::mutex                       notifyMutex;       // guards the queue + cooldown map
+//     std::deque<PendingNotice>        pendingNotices;
+//     std::map<std::string, std::chrono::steady_clock::time_point> lastNotified;
+//     std::atomic<bool>                notifyEnabled{ true };
+//     std::atomic<int>                 notifyMinRank{ 1 };   // Medium and above
+ 
+//     // Called from any thread. Only queues; the UI thread sends the toast.
+//     void queueNotification(const BackendAlert& a, bool force = false)
+//     {
+//         if (!force && (!notifyEnabled || SeverityRank(a.severity) < notifyMinRank))
+//             return;
+ 
+//         std::lock_guard<std::mutex> g(notifyMutex);
+ 
+//         if (!force)
+//         {
+//             // Same rule from the same source: at most one toast per 10 s
+//             const std::string key = a.source + "|" + a.rule;
+//             const auto now = std::chrono::steady_clock::now();
+//             const auto it  = lastNotified.find(key);
+ 
+//             if (it != lastNotified.end() &&
+//                 now - it->second < std::chrono::seconds(10))
+//                 return;
+ 
+//             lastNotified[key] = now;
+//         }
+ 
+//         if (pendingNotices.size() >= 20)
+//             pendingNotices.pop_front();
+ 
+//         PendingNotice n;
+//         n.title   = Utf8ToWide("HIDS - " + a.severity + " alert");
+//         n.message = Utf8ToWide(a.description);
+//         n.icon    = IconForSeverity(a.severity);
+//         pendingNotices.push_back(std::move(n));
+//     }
+ 
+//     // Caller must hold dataMutex. Single place where alerts are added.
+//     // Lock order: dataMutex -> notifyMutex (flushNotifications never holds both).
+//     void insertAlertLocked(const BackendAlert& a)
+//     {
+//         alerts.push_front(a);
+ 
+//         if (alerts.size() > MAX_ALERTS)
+//             alerts.pop_back();
+ 
+//         queueNotification(a);
+//     }
+ 
+ 
+//     void pushAccessAlert(const char* severity,
+//                          const char* rule,
+//                          const std::string& text)
+//     {
+//         std::lock_guard<std::mutex> guard(dataMutex);
+ 
+//         BackendAlert a;
+//         a.id          = lockAlertID++;
+//         a.time        = NowTimeOfDay();
+//         a.severity    = severity;
+//         a.source      = "Access Control";
+//         a.rule        = rule;
+//         a.description = std::string(rule) + " - " + text;
+ 
+//         insertAlertLocked(a);
+//     }
+ 
+//     PasswordLock::Result checkPassword(const std::string& password,
+//                                        std::string& message)
+//     {
+//         const PasswordLock::Result r = accessLock.verify(password);
+ 
+//         switch (r)
+//         {
+//         case PasswordLock::Result::Ok:
+//             message.clear();
+//             break;
+ 
+//         case PasswordLock::Result::NotSet:
+//             message = "No password has been set yet.";
+//             break;
+ 
+//         case PasswordLock::Result::LockedOut:
+//             message = "Too many wrong attempts. Try again in " +
+//                       std::to_string(accessLock.lockoutSecondsLeft()) + " s.";
+//             break;
+ 
+//         case PasswordLock::Result::Wrong:
+//         {
+//             const int wait = accessLock.lockoutSecondsLeft();
+ 
+//             if (wait > 0)
+//             {
+//                 message = "Wrong password. Locked for " +
+//                           std::to_string(wait) + " s.";
+ 
+//                 pushAccessAlert("High", "Too Many Failed Unlocks",
+//                     std::to_string(accessLock.failedAttempts()) +
+//                     " wrong password attempts in a row");
+//             }
+//             else
+//             {
+//                 message = "Wrong password.";
+ 
+//                 pushAccessAlert("Medium", "Failed Unlock",
+//                     "Wrong password entered for a protected action");
+//             }
+ 
+//             break;
+//         }
+//         }
+ 
+//         return r;
+//     }
+ 
+ 
+//     FileScanner           scanner;
+//     std::mutex            scanMutex;
+//     std::size_t           scanAlertsSeen = 0;
+//     int                   scanAlertID    = 200000;
+ 
+ 
+//     std::atomic<bool> running;
+//     std::thread eventThread;
+//     std::thread statsThread;
+ 
+//     mutable std::mutex dataMutex;
+//     BackendStats stats;
+//     BackendAnalysis analysis;
+//     std::vector<BackendProcess> processes;
+//     std::deque<BackendAlert> alerts;
+//     std::deque<BackendEvent> events;
+ 
+//     Impl()
+//         : fileMonitor(WATCHED_DIRECTORY),
+//           nextAlertID(1),
+//           resourceHistory(60),
+//           anomalyAlertID(100000),
+//           sampleCounter(0),
+//           running(false)
+//     {
+//         addRules();
+//     }
+ 
+ 
+//     void addRules()
+//     {
+//         ruleEngine.addRule(Rule(
+//             1, "Multiple Failed Logins", "LOGIN_FAILURE", 2, "HIGH"));
+ 
+//         ruleEngine.addRule(Rule(
+//             2, "Suspicious PowerShell Process", "PROCESS_START", 1, "HIGH",
+//             "powershell.exe"));
+ 
+//         ruleEngine.addRule(Rule(
+//             3, "Suspicious Script File", "FILE_CREATED", 1, "HIGH",
+//             ".ps1"));
+//     }
+ 
+ 
+//     void resetPipeline()
+//     {
+//         collector      = EventCollector();
+//         ruleEngine     = RuleEngine();
+//         loginMonitor   = LoginMonitor();
+//         processMonitor = ProcessMonitor();
+//         fileMonitor    = FileMonitor(WATCHED_DIRECTORY);
+//         processSampler = OngoingProcessMonitor();
+ 
+//         resourceMonitor = SystemResourceMonitor();
+//         resourceHistory.clear();
+//         anomalyDetector.reset();
+ 
+//         {
+//             std::lock_guard<std::mutex> lock(dataMutex);
+//             analysis = BackendAnalysis();
+//         }
+ 
+//         addRules();
+//     }
+ 
+//     void joinThreads()
+//     {
+//         if (eventThread.joinable()) eventThread.join();
+//         if (statsThread.joinable()) statsThread.join();
+//     }
+ 
+ 
+//     void sleepWhileRunning(int milliseconds)
+//     {
+//         for (int waited = 0; waited < milliseconds && running; waited += 100)
+//             std::this_thread::sleep_for(std::chrono::milliseconds(100));
+//     }
+ 
+ 
+ 
+//     void eventLoop()
+//     {
+//         while (running)
+//         {
+//             pollMonitors();
+//             drainEvents();
+//             pollScanner();
+ 
+//             sleepWhileRunning(EVENT_POLL_MS);
+//         }
+//     }
+ 
+//     void pollMonitors()
+//     {
+//         Event loginEvent;
+//         if (loginMonitor.checkForLoginFailure(loginEvent))
+//             collector.addEvent(loginEvent);
+ 
+//         Event processEvent;
+//         if (processMonitor.checkForNewProcess(processEvent))
+//             collector.addEvent(processEvent);
+ 
+//         Event fileEvent;
+//         if (fileMonitor.checkForFileChange(fileEvent))
+//             collector.addEvent(fileEvent);
+//     }
+ 
+//     void drainEvents()
+//     {
+//         while (collector.hasEvents())
+//         {
+//             const Event event = collector.getNextEvent();
+ 
+//             if (!filter.isRelevant(event))
+//                 continue;
+ 
+//             recordEvent(event);
+ 
+//             std::string matchedRule;
+//             std::string severity;
+ 
+//             if (ruleEngine.checkEvent(event, matchedRule, severity))
+//                 recordAlert(event, matchedRule, severity);
+//         }
+//     }
+ 
+ 
+//     void pollScanner()
+//     {
+//         std::lock_guard<std::mutex> scanLock(scanMutex);
+ 
+//         const std::vector<ScanFinding> findings = scanner.getFindings();
+ 
+//         if (findings.size() < scanAlertsSeen)
+//             scanAlertsSeen = 0;
+ 
+//         if (findings.size() == scanAlertsSeen)
+//             return;
+ 
+//         std::lock_guard<std::mutex> lock(dataMutex);
+ 
+//         for (std::size_t i = scanAlertsSeen; i < findings.size(); ++i)
+//         {
+//             const ScanFinding& f = findings[i];
+ 
+//             BackendAlert a;
+//             a.id          = scanAlertID++;
+//             a.time        = f.time.empty() ? NowTimeOfDay() : f.time;
+//             a.severity    = (f.level == "Malicious") ? "Critical" : "Medium";
+//             a.source      = "File Scanner";
+//             a.rule        = f.name;
+//             a.description = f.name + " - " + f.path + " (" + f.reason + ")";
+ 
+//             insertAlertLocked(a);
+//         }
+ 
+//         scanAlertsSeen = findings.size();
+//     }
+ 
+ 
+//     void recordEvent(const Event& event)
+//     {
+//         const std::string type = event.getEventType();
+ 
+//         if (type.rfind("LOGIN_", 0) != 0 && type.rfind("FILE_", 0) != 0)
+//             return;
+ 
+//         BackendEvent record;
+//         record.time        = event.getTimestamp();
+//         record.type        = type;
+//         record.description = event.getDescription();
+ 
+//         std::lock_guard<std::mutex> lock(dataMutex);
+ 
+//         events.push_front(record);
+ 
+//         if (events.size() > MAX_EVENTS)
+//             events.pop_back();
+//     }
+ 
+//     void recordAlert(
+//         const Event& event,
+//         const std::string& matchedRule,
+//         const std::string& severity)
+//     {
+//         const Alert alert(
+//             nextAlertID++,
+//             TitleCase(severity),
+//             matchedRule,
+//             event.getDescription(),
+//             SourceForEventType(event.getEventType()),
+//             event.getTimestamp()
+//         );
+ 
+//         BackendAlert record;
+//         record.id          = alert.getID();
+//         record.time        = TimeOfDay(alert.getTimestamp());
+//         record.severity    = alert.getSeverity();
+//         record.source      = alert.getSource();
+//         record.rule        = alert.getRuleName();
+//         record.description = alert.getRuleName() + " - " + alert.getMessage();
+ 
+//         std::lock_guard<std::mutex> lock(dataMutex);
+ 
+//         insertAlertLocked(record);
+//     }
+ 
+ 
+//     void statsLoop()
+//     {
+//         while (running)
+//         {
+//             sampleSystem();
+ 
+//             sleepWhileRunning(STATS_POLL_MS);
+//         }
+//     }
+ 
+//     void sampleSystem()
+//     {
+ 
+//         const std::vector<OngoingProcessInfo> raw =
+//             processSampler.collectProcesses();
+ 
+//         std::vector<BackendProcess> list;
+//         list.reserve(raw.size());
+ 
+//         for (const OngoingProcessInfo& p : raw)
+//         {
+//             BackendProcess row;
+ 
+//             row.pid  = static_cast<int>(p.pid);
+//             row.name = p.name.empty() ? "Unknown" : p.name;
+ 
+//             row.cpuPercent = p.cpuAvailable
+//                 ? static_cast<float>(p.cpuPercent) : 0.0f;
+ 
+//             row.memoryMB = p.memoryAvailable
+//                 ? static_cast<float>(p.memoryMB) : 0.0f;
+ 
+//             row.runningSeconds = p.startTimeAvailable
+//                 ? p.runningSeconds : 0.0;
+ 
+//             list.push_back(std::move(row));
+//         }
+ 
+ 
+//         std::map<DWORD, std::string> appWindows;
+//         EnumWindows(EnumAppWindowsProc, reinterpret_cast<LPARAM>(&appWindows));
+ 
+//         for (BackendProcess& row : list)
+//         {
+//             const auto it = appWindows.find(static_cast<DWORD>(row.pid));
+ 
+//             if (it != appWindows.end() &&
+//                 !IsProtectedProcess(row.name, static_cast<DWORD>(row.pid)))
+//             {
+//                 row.isApp       = true;
+//                 row.windowTitle = it->second;
+//             }
+//         }
+ 
+ 
+//         const SystemResourceStats res = resourceMonitor.collect();
+//         resourceHistory.addSample(res);
+ 
+ 
+//         const AnomalyResult anomaly = anomalyDetector.evaluate(res);
+ 
+ 
+//         bool           hasCulprit = false;
+//         BackendProcess culprit;
+ 
+//         if (anomaly.detected)
+//         {
+//             const bool byCpu = res.cpuPercent >= res.memoryPercent;
+ 
+//             const BackendProcess* best = nullptr;
+ 
+//             for (const BackendProcess& p : list)
+//             {
+//                 if (!p.isApp)
+//                     continue;
+ 
+//                 if (best == nullptr ||
+//                     (byCpu ? p.cpuPercent > best->cpuPercent
+//                            : p.memoryMB   > best->memoryMB))
+//                 {
+//                     best = &p;
+//                 }
+//             }
+ 
+ 
+//             if (best != nullptr &&
+//                 (byCpu ? best->cpuPercent >= 5.0f : best->memoryMB >= 300.0f))
+//             {
+//                 culprit    = *best;
+//                 hasCulprit = true;
+//             }
+//         }
+ 
+ 
+//         std::vector<ProcessSnapshot> snapshots;
+//         snapshots.reserve(list.size());
+ 
+//         for (const BackendProcess& p : list)
+//         {
+//             ProcessSnapshot s;
+//             s.pid        = static_cast<unsigned long>(p.pid);
+//             s.name       = p.name;
+//             s.cpuPercent = p.cpuPercent;
+//             s.memoryMB   = p.memoryMB;
+//             snapshots.push_back(std::move(s));
+//         }
+ 
+//         const SystemAnalysisReport report =
+//             analysisEngine.analyze(res, snapshots);
+ 
+//         BackendAnalysis out;
+//         out.valid                  = true;
+//         out.cpuPercent             = res.cpuPercent;
+//         out.memoryPercent          = res.memoryPercent;
+//         out.totalMemoryMB          = res.totalMemoryMB;
+//         out.usedMemoryMB           = res.usedMemoryMB;
+//         out.availableMemoryMB      = res.availableMemoryMB;
+//         out.cpuAvailable           = res.cpuAvailable;
+//         out.memoryAvailable        = res.memoryAvailable;
+//         out.processCount           = report.processCount;
+//         out.highCpuProcessCount    = report.highCpuProcessCount;
+//         out.highMemoryProcessCount = report.highMemoryProcessCount;
+//         out.findings               = report.findings;
+ 
+//         const std::size_t topN =
+//             std::min<std::size_t>(10, report.topCpuProcesses.size());
+ 
+//         for (std::size_t i = 0; i < topN; ++i)
+//         {
+//             const ProcessSnapshot& s = report.topCpuProcesses[i];
+ 
+//             BackendProcess row;
+//             row.pid            = static_cast<int>(s.pid);
+//             row.name           = s.name;
+//             row.cpuPercent     = static_cast<float>(s.cpuPercent);
+//             row.memoryMB       = static_cast<float>(s.memoryMB);
+//             row.runningSeconds = 0.0;
+ 
+//             out.topCpuProcesses.push_back(std::move(row));
+//         }
+ 
+//         for (const SystemResourceStats& h : resourceHistory.getSamples())
+//         {
+//             out.cpuHistory.push_back(static_cast<float>(h.cpuPercent));
+//             out.ramHistory.push_back(static_cast<float>(h.memoryPercent));
+//         }
+ 
+ 
+//         std::lock_guard<std::mutex> lock(dataMutex);
+ 
+//         stats.cpuPercent   = static_cast<float>(res.cpuPercent);
+//         stats.ramPercent   = static_cast<float>(res.memoryPercent);
+//         stats.processCount = static_cast<int>(list.size());
+//         stats.sample       = ++sampleCounter;
+ 
+//         processes.swap(list);
+//         analysis = std::move(out);
+ 
+ 
+//         if (anomaly.detected)
+//         {
+//             BackendAlert a;
+//             a.id          = anomalyAlertID++;
+//             a.time        = NowTimeOfDay();
+//             a.severity    = "Medium";
+//             a.source      = "System Analysis";
+//             a.rule        = "Resource Anomaly";
+//             a.description = "Resource Anomaly - " + anomaly.message;
+ 
+//             if (hasCulprit)
+//             {
+//                 char extra[256];
+//                 std::snprintf(extra, sizeof(extra),
+//                     " | Top app: %s (PID %d) - CPU %.0f%%, %.0f MB",
+//                     culprit.name.c_str(), culprit.pid,
+//                     culprit.cpuPercent, culprit.memoryMB);
+ 
+//                 a.description    += extra;
+//                 a.canEndTask      = true;
+//                 a.culpritPid      = culprit.pid;
+//                 a.culpritName     = culprit.name;
+//                 a.culpritCpu      = culprit.cpuPercent;
+//                 a.culpritMemoryMB = culprit.memoryMB;
+//             }
+ 
+//             insertAlertLocked(a);
+//         }
+//     }
+// };
+ 
+ 
+// HIDSBackend::HIDSBackend()
+//     : impl(new Impl())
+// {
+// }
+ 
+// HIDSBackend::~HIDSBackend()
+// {
+//     shutdown();
+// }
+ 
+// void HIDSBackend::start()
+// {
+//     if (impl->running)
+//         return;
+ 
+//     // A previous run may still be finishing its last cycle
+//     impl->joinThreads();
+//     impl->resetPipeline();
+ 
+//     impl->running = true;
+ 
+//     impl->eventThread = std::thread(&Impl::eventLoop, impl.get());
+//     impl->statsThread = std::thread(&Impl::statsLoop, impl.get());
+// }
+ 
+// void HIDSBackend::stop()
+// {
+//     impl->running = false;
+// }
+ 
+// void HIDSBackend::shutdown()
+// {
+//     impl->running = false;
+//     impl->scanner.shutdown();
+//     impl->joinThreads();
+//     impl->notifier.reset();     // destructor removes the tray icon
+// }
+ 
+// bool HIDSBackend::isRunning() const
+// {
+//     return impl->running;
+// }
+ 
+// BackendStats HIDSBackend::getStats() const
+// {
+//     std::lock_guard<std::mutex> lock(impl->dataMutex);
+//     return impl->stats;
+// }
+ 
+// std::vector<BackendProcess> HIDSBackend::getProcesses() const
+// {
+//     std::lock_guard<std::mutex> lock(impl->dataMutex);
+//     return impl->processes;
+// }
+ 
+// std::vector<BackendAlert> HIDSBackend::getAlerts() const
+// {
+//     std::lock_guard<std::mutex> lock(impl->dataMutex);
+//     return std::vector<BackendAlert>(impl->alerts.begin(), impl->alerts.end());
+// }
+ 
+// std::vector<BackendEvent> HIDSBackend::getEvents() const
+// {
+//     std::lock_guard<std::mutex> lock(impl->dataMutex);
+//     return std::vector<BackendEvent>(impl->events.begin(), impl->events.end());
+// }
+ 
+// BackendAnalysis HIDSBackend::getAnalysis() const
+// {
+//     std::lock_guard<std::mutex> lock(impl->dataMutex);
+//     return impl->analysis;
+// }
+ 
+ 
+// bool HIDSBackend::startScan(ScanType type, const std::string& customPath)
+// {
+//     std::lock_guard<std::mutex> lock(impl->scanMutex);
+ 
+//     if (!impl->scanner.start(type, customPath))
+//         return false;
+ 
+//     impl->scanAlertsSeen = 0;
+//     return true;
+// }
+ 
+// void HIDSBackend::cancelScan()
+// {
+//     impl->scanner.cancel();
+// }
+ 
+// bool HIDSBackend::isScanRunning() const
+// {
+//     return impl->scanner.isRunning();
+// }
+ 
+// ScanStatus HIDSBackend::getScanStatus() const
+// {
+//     return impl->scanner.getStatus();
+// }
+ 
+// std::vector<ScanFinding> HIDSBackend::getScanFindings() const
+// {
+//     return impl->scanner.getFindings();
+// }
+ 
+// bool HIDSBackend::exportScanReport(std::string& outPath) const
+// {
+//     return impl->scanner.exportReport(outPath);
+// }
+ 
+// bool HIDSBackend::endTask(int pid, std::string& message, const std::string& expectedName)
+// {
+//     std::string name;
+//     bool isApp = false;
+ 
+//     {
+//         std::lock_guard<std::mutex> lock(impl->dataMutex);
+ 
+//         for (const BackendProcess& p : impl->processes)
+//         {
+//             if (p.pid == pid)
+//             {
+//                 name  = p.name;
+//                 isApp = p.isApp;
+//                 break;
+//             }
+//         }
+//     }
+ 
+//     if (name.empty())
+//     {
+//         message = "That process is no longer running.";
+//         return false;
+//     }
+ 
+ 
+//     if (!expectedName.empty() && name != expectedName)
+//     {
+//         message = expectedName + " has already closed.";
+//         return false;
+//     }
+ 
+//     if (!isApp)
+//     {
+//         message = name + " is a system or background process and cannot be ended from here.";
+//         return false;
+//     }
+ 
+//     HANDLE handle = OpenProcess(PROCESS_TERMINATE, FALSE, static_cast<DWORD>(pid));
+ 
+//     if (handle == nullptr)
+//     {
+//         const DWORD error = GetLastError();
+ 
+//         message = (error == ERROR_ACCESS_DENIED)
+//             ? "Access denied for " + name + " - run HIDS as Administrator."
+//             : "Could not open " + name + " (error " + std::to_string(error) + ").";
+ 
+//         return false;
+//     }
+ 
+//     const BOOL ok = TerminateProcess(handle, 1);
+//     CloseHandle(handle);
+ 
+//     if (!ok)
+//     {
+//         message = "Windows refused to end " + name + ".";
+//         return false;
+//     }
+ 
+//     message = "Ended " + name + " (PID " + std::to_string(pid) + ").";
+ 
+ 
+//     {
+//         std::lock_guard<std::mutex> lock(impl->dataMutex);
+ 
+//         BackendAlert a;
+//         a.id          = impl->endTaskAlertID++;
+//         a.time        = NowTimeOfDay();
+//         a.severity    = "Low";
+//         a.source      = "Process Control";
+//         a.rule        = "Task Ended";
+//         a.description = "Task Ended - " + message;
+ 
+//         impl->insertAlertLocked(a);
+//     }
+ 
+//     return true;
+// }
+ 
+ 
+ 
+// bool HIDSBackend::isLockConfigured() const
+// {
+//     return impl->accessLock.isConfigured();
+// }
+ 
+// int HIDSBackend::lockoutSecondsLeft() const
+// {
+//     return impl->accessLock.lockoutSecondsLeft();
+// }
+ 
+// bool HIDSBackend::verifyPassword(const std::string& password, std::string& message)
+// {
+//     return impl->checkPassword(password, message) == PasswordLock::Result::Ok;
+// }
+ 
+// bool HIDSBackend::setPassword(
+//     const std::string& newPassword,
+//     const std::string& oldPassword,
+//     std::string& message)
+// {
+//     const bool changing = impl->accessLock.isConfigured();
+ 
+//     if (changing &&
+//         impl->checkPassword(oldPassword, message) != PasswordLock::Result::Ok)
+//     {
+//         return false;
+//     }
+ 
+//     if (!impl->accessLock.setPassword(newPassword, message))
+//         return false;
+ 
+//     message = changing ? "Password changed." : "Password created.";
+ 
+//     impl->pushAccessAlert("Low",
+//         changing ? "Password Changed" : "Password Created",
+//         "Access password for Logs & Reports and End Task");
+ 
+//     return true;
+// }
+ 
+ 
+ 
+// // ------------------------------------------------------------
+// // DESKTOP NOTIFICATIONS
+// // ------------------------------------------------------------
+ 
+// void HIDSBackend::attachWindow(void* nativeWindowHandle)
+// {
+//     if (impl->notifier || nativeWindowHandle == nullptr)
+//         return;
+ 
+//     impl->notifier.reset(
+//         new DesktopNotifier(static_cast<HWND>(nativeWindowHandle)));
+ 
+//     if (!impl->notifier->initialize())
+//         impl->notifier.reset();      // no tray icon -> notifications silently disabled
+// }
+ 
+// void HIDSBackend::flushNotifications()
+// {
+//     std::deque<Impl::PendingNotice> batch;
+ 
+//     {
+//         std::lock_guard<std::mutex> g(impl->notifyMutex);
+//         batch.swap(impl->pendingNotices);
+//     }
+ 
+//     if (batch.empty() || !impl->notifier)
+//         return;
+ 
+//     if (batch.size() == 1)
+//     {
+//         impl->notifier->sendAlert(
+//             batch[0].title, batch[0].message, batch[0].icon);
+//         return;
+//     }
+ 
+//     // Several alerts in one frame: Windows shows one balloon at a time,
+//     // so summarise instead of overwriting each other.
+//     DWORD icon = NIIF_INFO;
+ 
+//     for (const Impl::PendingNotice& n : batch)
+//         if (n.icon == NIIF_ERROR || (n.icon == NIIF_WARNING && icon == NIIF_INFO))
+//             icon = n.icon;
+ 
+//     impl->notifier->sendAlert(
+//         L"HIDS - " + std::to_wstring(batch.size()) + L" new alerts",
+//         batch.back().message,
+//         icon);
+// }
+ 
+// void HIDSBackend::setNotificationsEnabled(bool enabled)
+// {
+//     impl->notifyEnabled = enabled;
+// }
+ 
+// bool HIDSBackend::notificationsEnabled() const
+// {
+//     return impl->notifyEnabled;
+// }
+ 
+// void HIDSBackend::setNotificationMinSeverity(int rank)
+// {
+//     impl->notifyMinRank = rank < 0 ? 0 : (rank > 3 ? 3 : rank);
+// }
+ 
+// int HIDSBackend::notificationMinSeverity() const
+// {
+//     return impl->notifyMinRank;
+// }
+ 
+// void HIDSBackend::sendTestNotification()
+// {
+//     BackendAlert a;
+//     a.severity    = "Low";
+//     a.source      = "Notifications";
+//     a.rule        = "Test";
+//     a.description = "Desktop notifications are working.";
+ 
+//     impl->queueNotification(a, true);      // bypasses threshold and cooldown
+// }
+
+
+
+
+
 #include "HIDSBackend.h"
  
 #include "Alert.h"
+#include "DesktopNotifier.h"
 #include "Event.h"
 #include "EventCollector.h"
 #include "EventFilter.h"
 #include "FileMonitor.h"
 #include "LoginMonitor.h"
-#include "OngoingProcessMonitor.h"   
+#include "OngoingProcessMonitor.h"
 #include "ProcessMonitor.h"
 #include "PasswordLock.h"
 #include "Rule.h"
 #include "RuleEngine.h"
  
-
 #include "AnomalyDetector.h"
 #include "ResourceHistory.h"
 #include "SystemAnalysis.h"
 #include "SystemResourceMonitor.h"
  
 #include <windows.h>
+#include <shellapi.h>
  
 #include <algorithm>
 #include <atomic>
@@ -27,10 +1998,12 @@
 #include <cstdio>
 #include <deque>
 #include <map>
+#include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
  
-
+ 
 using hids_analysis::AnomalyDetector;
 using hids_analysis::AnomalyResult;
 using hids_analysis::ProcessSnapshot;
@@ -40,7 +2013,7 @@ using hids_analysis::SystemAnalysisReport;
 using hids_analysis::SystemResourceMonitor;
 using hids_analysis::SystemResourceStats;
  
-
+ 
  
 namespace
 {
@@ -49,9 +2022,9 @@ namespace
     const std::size_t MAX_ALERTS = 200;
     const std::size_t MAX_EVENTS = 500;
  
-    const int EVENT_POLL_MS = 2000;   
-    const int STATS_POLL_MS = 1000;   
-    
+    const int EVENT_POLL_MS = 2000;
+    const int STATS_POLL_MS = 1000;
+ 
     std::string TitleCase(std::string text)
     {
         for (std::size_t i = 0; i < text.size(); ++i)
@@ -72,59 +2045,99 @@ namespace
         return "HIDS";
     }
  
-   
+ 
     std::string TimeOfDay(const std::string& timestamp)
     {
         return timestamp.size() >= 19 ? timestamp.substr(11, 8) : timestamp;
     }
  
-   
-
+ 
+    // ---- Desktop notification helpers ----
+ 
+    int SeverityRank(const std::string& s)
+    {
+        if (s == "Critical") return 3;
+        if (s == "High")     return 2;
+        if (s == "Medium")   return 1;
+        return 0;
+    }
+ 
+    std::wstring Utf8ToWide(const std::string& s)
+    {
+        if (s.empty())
+            return std::wstring();
+ 
+        const int n = MultiByteToWideChar(
+            CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
+ 
+        if (n <= 0)
+            return std::wstring();
+ 
+        std::wstring w((std::size_t)n, L'\0');
+ 
+        MultiByteToWideChar(
+            CP_UTF8, 0, s.data(), (int)s.size(), &w[0], n);
+ 
+        return w;
+    }
+ 
+    DWORD IconForSeverity(const std::string& s)
+    {
+        const int r = SeverityRank(s);
+ 
+        if (r >= 3) return NIIF_ERROR;
+        if (r >= 1) return NIIF_WARNING;
+ 
+        return NIIF_INFO;
+    }
+ 
+ 
     BOOL CALLBACK EnumAppWindowsProc(HWND hwnd, LPARAM lParam)
     {
         if (!IsWindowVisible(hwnd))
             return TRUE;
-
+ 
         if (GetWindow(hwnd, GW_OWNER) != nullptr)          // owned popups
             return TRUE;
-
+ 
         if (GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW)
             return TRUE;
-
+ 
         wchar_t title[256];
         const int n = GetWindowTextW(hwnd, title, 256);
-
+ 
         if (n <= 0)
             return TRUE;
-
+ 
         DWORD pid = 0;
         GetWindowThreadProcessId(hwnd, &pid);
-
+ 
         std::map<DWORD, std::string>* out =
             reinterpret_cast<std::map<DWORD, std::string>*>(lParam);
-
+ 
         if (out->find(pid) != out->end())
-            return TRUE;                                   
+            return TRUE;
+ 
         char utf8[768];
         const int len = WideCharToMultiByte(
             CP_UTF8, 0, title, n, utf8, (int)sizeof(utf8), nullptr, nullptr);
-
+ 
         if (len > 0)
             (*out)[pid] = std::string(utf8, (std::size_t)len);
-
+ 
         return TRUE;
     }
-
-    
+ 
+ 
     bool IsProtectedProcess(const std::string& name, DWORD pid)
     {
         if (pid <= 4 || pid == GetCurrentProcessId())
             return true;
-
+ 
         std::string lower = name;
         for (char& c : lower)
             c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-
+ 
         static const char* const PROTECTED_NAMES[] = {
             "system", "registry", "smss.exe", "csrss.exe", "wininit.exe",
             "winlogon.exe", "services.exe", "lsass.exe", "dwm.exe",
@@ -133,15 +2146,15 @@ namespace
             "shellexperiencehost.exe", "sihost.exe", "taskhostw.exe",
             "fontdrvhost.exe"
         };
-
+ 
         for (const char* p : PROTECTED_NAMES)
             if (lower == p)
                 return true;
-
+ 
         return false;
     }
-
-    
+ 
+ 
     std::string NowTimeOfDay()
     {
         SYSTEMTIME st{};
@@ -157,11 +2170,11 @@ namespace
     }
 }
  
-
+ 
  
 struct HIDSBackend::Impl
 {
-    
+ 
     EventCollector collector;
     EventFilter    filter;
     RuleEngine     ruleEngine;
@@ -177,17 +2190,78 @@ struct HIDSBackend::Impl
     AnomalyDetector       anomalyDetector;
     int                   anomalyAlertID;
     unsigned long         sampleCounter;
-    int                   endTaskAlertID = 300000;   
-
-    
+    int                   endTaskAlertID = 300000;
+ 
+ 
     PasswordLock          accessLock;
-    int                   lockAlertID = 400000;      
+    int                   lockAlertID = 400000;
+ 
+    // ---------------- Desktop notifications ----------------
+    struct PendingNotice
+    {
+        std::wstring title;
+        std::wstring message;
+        DWORD        icon = NIIF_INFO;
+    };
+ 
+    std::unique_ptr<DesktopNotifier> notifier;          // UI thread only
+    std::mutex                       notifyMutex;       // guards the queue + cooldown map
+    std::deque<PendingNotice>        pendingNotices;
+    std::map<std::string, std::chrono::steady_clock::time_point> lastNotified;
+    std::atomic<bool>                notifyEnabled{ true };
+    std::atomic<int>                 notifyMinRank{ 1 };   // Medium and above
+ 
+    // Called from any thread. Only queues; the UI thread sends the toast.
+    void queueNotification(const BackendAlert& a, bool force = false)
+    {
+        if (!force && (!notifyEnabled || SeverityRank(a.severity) < notifyMinRank))
+            return;
+ 
+        std::lock_guard<std::mutex> g(notifyMutex);
+ 
+        if (!force)
+        {
+            // Same rule from the same source: at most one toast per 10 s
+            const std::string key = a.source + "|" + a.rule;
+            const auto now = std::chrono::steady_clock::now();
+            const auto it  = lastNotified.find(key);
+ 
+            if (it != lastNotified.end() &&
+                now - it->second < std::chrono::seconds(10))
+                return;
+ 
+            lastNotified[key] = now;
+        }
+ 
+        if (pendingNotices.size() >= 20)
+            pendingNotices.pop_front();
+ 
+        PendingNotice n;
+        n.title   = Utf8ToWide("HIDS - " + a.severity + " alert");
+        n.message = Utf8ToWide(a.description);
+        n.icon    = IconForSeverity(a.severity);
+        pendingNotices.push_back(std::move(n));
+    }
+ 
+    // Caller must hold dataMutex. Single place where alerts are added.
+    // Lock order: dataMutex -> notifyMutex (flushNotifications never holds both).
+    void insertAlertLocked(const BackendAlert& a)
+    {
+        alerts.push_front(a);
+ 
+        if (alerts.size() > MAX_ALERTS)
+            alerts.pop_back();
+ 
+        queueNotification(a);
+    }
+ 
+ 
     void pushAccessAlert(const char* severity,
                          const char* rule,
                          const std::string& text)
     {
         std::lock_guard<std::mutex> guard(dataMutex);
-
+ 
         BackendAlert a;
         a.id          = lockAlertID++;
         a.time        = NowTimeOfDay();
@@ -195,42 +2269,39 @@ struct HIDSBackend::Impl
         a.source      = "Access Control";
         a.rule        = rule;
         a.description = std::string(rule) + " - " + text;
-
-        alerts.push_front(a);
-
-        if (alerts.size() > MAX_ALERTS)
-            alerts.pop_back();
+ 
+        insertAlertLocked(a);
     }
-
+ 
     PasswordLock::Result checkPassword(const std::string& password,
                                        std::string& message)
     {
         const PasswordLock::Result r = accessLock.verify(password);
-
+ 
         switch (r)
         {
         case PasswordLock::Result::Ok:
             message.clear();
             break;
-
+ 
         case PasswordLock::Result::NotSet:
             message = "No password has been set yet.";
             break;
-
+ 
         case PasswordLock::Result::LockedOut:
             message = "Too many wrong attempts. Try again in " +
                       std::to_string(accessLock.lockoutSecondsLeft()) + " s.";
             break;
-
+ 
         case PasswordLock::Result::Wrong:
         {
             const int wait = accessLock.lockoutSecondsLeft();
-
+ 
             if (wait > 0)
             {
                 message = "Wrong password. Locked for " +
                           std::to_string(wait) + " s.";
-
+ 
                 pushAccessAlert("High", "Too Many Failed Unlocks",
                     std::to_string(accessLock.failedAttempts()) +
                     " wrong password attempts in a row");
@@ -238,30 +2309,30 @@ struct HIDSBackend::Impl
             else
             {
                 message = "Wrong password.";
-
+ 
                 pushAccessAlert("Medium", "Failed Unlock",
                     "Wrong password entered for a protected action");
             }
-
+ 
             break;
         }
         }
-
+ 
         return r;
     }
-
-    
+ 
+ 
     FileScanner           scanner;
-    std::mutex            scanMutex;            
-    std::size_t           scanAlertsSeen = 0;   
+    std::mutex            scanMutex;
+    std::size_t           scanAlertsSeen = 0;
     int                   scanAlertID    = 200000;
  
-    
+ 
     std::atomic<bool> running;
     std::thread eventThread;
     std::thread statsThread;
  
-     mutable std::mutex dataMutex;
+    mutable std::mutex dataMutex;
     BackendStats stats;
     BackendAnalysis analysis;
     std::vector<BackendProcess> processes;
@@ -279,7 +2350,7 @@ struct HIDSBackend::Impl
         addRules();
     }
  
-    
+ 
     void addRules()
     {
         ruleEngine.addRule(Rule(
@@ -294,7 +2365,7 @@ struct HIDSBackend::Impl
             ".ps1"));
     }
  
-    
+ 
     void resetPipeline()
     {
         collector      = EventCollector();
@@ -322,14 +2393,14 @@ struct HIDSBackend::Impl
         if (statsThread.joinable()) statsThread.join();
     }
  
-    
+ 
     void sleepWhileRunning(int milliseconds)
     {
         for (int waited = 0; waited < milliseconds && running; waited += 100)
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
  
-   
+ 
  
     void eventLoop()
     {
@@ -377,25 +2448,25 @@ struct HIDSBackend::Impl
         }
     }
  
-    
+ 
     void pollScanner()
     {
         std::lock_guard<std::mutex> scanLock(scanMutex);
-
+ 
         const std::vector<ScanFinding> findings = scanner.getFindings();
-
-        if (findings.size() < scanAlertsSeen)   
+ 
+        if (findings.size() < scanAlertsSeen)
             scanAlertsSeen = 0;
-
+ 
         if (findings.size() == scanAlertsSeen)
             return;
-
+ 
         std::lock_guard<std::mutex> lock(dataMutex);
-
+ 
         for (std::size_t i = scanAlertsSeen; i < findings.size(); ++i)
         {
             const ScanFinding& f = findings[i];
-
+ 
             BackendAlert a;
             a.id          = scanAlertID++;
             a.time        = f.time.empty() ? NowTimeOfDay() : f.time;
@@ -403,17 +2474,14 @@ struct HIDSBackend::Impl
             a.source      = "File Scanner";
             a.rule        = f.name;
             a.description = f.name + " - " + f.path + " (" + f.reason + ")";
-
-            alerts.push_front(a);
-
-            if (alerts.size() > MAX_ALERTS)
-                alerts.pop_back();
+ 
+            insertAlertLocked(a);
         }
-
+ 
         scanAlertsSeen = findings.size();
     }
-
-  
+ 
+ 
     void recordEvent(const Event& event)
     {
         const std::string type = event.getEventType();
@@ -458,14 +2526,10 @@ struct HIDSBackend::Impl
  
         std::lock_guard<std::mutex> lock(dataMutex);
  
-        alerts.push_front(record);
- 
-        if (alerts.size() > MAX_ALERTS)
-            alerts.pop_back();
+        insertAlertLocked(record);
     }
  
-    //hello
-    
+ 
     void statsLoop()
     {
         while (running)
@@ -478,7 +2542,7 @@ struct HIDSBackend::Impl
  
     void sampleSystem()
     {
-        
+ 
         const std::vector<OngoingProcessInfo> raw =
             processSampler.collectProcesses();
  
@@ -504,14 +2568,14 @@ struct HIDSBackend::Impl
             list.push_back(std::move(row));
         }
  
-        
+ 
         std::map<DWORD, std::string> appWindows;
         EnumWindows(EnumAppWindowsProc, reinterpret_cast<LPARAM>(&appWindows));
-
+ 
         for (BackendProcess& row : list)
         {
             const auto it = appWindows.find(static_cast<DWORD>(row.pid));
-
+ 
             if (it != appWindows.end() &&
                 !IsProtectedProcess(row.name, static_cast<DWORD>(row.pid)))
             {
@@ -519,29 +2583,29 @@ struct HIDSBackend::Impl
                 row.windowTitle = it->second;
             }
         }
-
-        
+ 
+ 
         const SystemResourceStats res = resourceMonitor.collect();
         resourceHistory.addSample(res);
  
-    
+ 
         const AnomalyResult anomaly = anomalyDetector.evaluate(res);
-
-        
+ 
+ 
         bool           hasCulprit = false;
         BackendProcess culprit;
-
+ 
         if (anomaly.detected)
         {
             const bool byCpu = res.cpuPercent >= res.memoryPercent;
-
+ 
             const BackendProcess* best = nullptr;
-
+ 
             for (const BackendProcess& p : list)
             {
                 if (!p.isApp)
                     continue;
-
+ 
                 if (best == nullptr ||
                     (byCpu ? p.cpuPercent > best->cpuPercent
                            : p.memoryMB   > best->memoryMB))
@@ -549,17 +2613,17 @@ struct HIDSBackend::Impl
                     best = &p;
                 }
             }
-
-            
+ 
+ 
             if (best != nullptr &&
                 (byCpu ? best->cpuPercent >= 5.0f : best->memoryMB >= 300.0f))
             {
-                culprit    = *best;     
+                culprit    = *best;
                 hasCulprit = true;
             }
         }
  
-        
+ 
         std::vector<ProcessSnapshot> snapshots;
         snapshots.reserve(list.size());
  
@@ -613,7 +2677,7 @@ struct HIDSBackend::Impl
             out.ramHistory.push_back(static_cast<float>(h.memoryPercent));
         }
  
-    
+ 
         std::lock_guard<std::mutex> lock(dataMutex);
  
         stats.cpuPercent   = static_cast<float>(res.cpuPercent);
@@ -624,7 +2688,7 @@ struct HIDSBackend::Impl
         processes.swap(list);
         analysis = std::move(out);
  
-        
+ 
         if (anomaly.detected)
         {
             BackendAlert a;
@@ -634,7 +2698,7 @@ struct HIDSBackend::Impl
             a.source      = "System Analysis";
             a.rule        = "Resource Anomaly";
             a.description = "Resource Anomaly - " + anomaly.message;
-
+ 
             if (hasCulprit)
             {
                 char extra[256];
@@ -642,7 +2706,7 @@ struct HIDSBackend::Impl
                     " | Top app: %s (PID %d) - CPU %.0f%%, %.0f MB",
                     culprit.name.c_str(), culprit.pid,
                     culprit.cpuPercent, culprit.memoryMB);
-
+ 
                 a.description    += extra;
                 a.canEndTask      = true;
                 a.culpritPid      = culprit.pid;
@@ -651,15 +2715,11 @@ struct HIDSBackend::Impl
                 a.culpritMemoryMB = culprit.memoryMB;
             }
  
-            alerts.push_front(a);
- 
-            if (alerts.size() > MAX_ALERTS)
-                alerts.pop_back();
+            insertAlertLocked(a);
         }
     }
 };
  
-------------------------------------------------------------
  
 HIDSBackend::HIDSBackend()
     : impl(new Impl())
@@ -696,6 +2756,7 @@ void HIDSBackend::shutdown()
     impl->running = false;
     impl->scanner.shutdown();
     impl->joinThreads();
+    impl->notifier.reset();     // destructor removes the tray icon
 }
  
 bool HIDSBackend::isRunning() const
@@ -732,52 +2793,52 @@ BackendAnalysis HIDSBackend::getAnalysis() const
     std::lock_guard<std::mutex> lock(impl->dataMutex);
     return impl->analysis;
 }
-
-
+ 
+ 
 bool HIDSBackend::startScan(ScanType type, const std::string& customPath)
 {
     std::lock_guard<std::mutex> lock(impl->scanMutex);
-
+ 
     if (!impl->scanner.start(type, customPath))
         return false;
-
-    impl->scanAlertsSeen = 0;   
+ 
+    impl->scanAlertsSeen = 0;
     return true;
 }
-
+ 
 void HIDSBackend::cancelScan()
 {
     impl->scanner.cancel();
 }
-
+ 
 bool HIDSBackend::isScanRunning() const
 {
     return impl->scanner.isRunning();
 }
-
+ 
 ScanStatus HIDSBackend::getScanStatus() const
 {
     return impl->scanner.getStatus();
 }
-
+ 
 std::vector<ScanFinding> HIDSBackend::getScanFindings() const
 {
     return impl->scanner.getFindings();
 }
-
+ 
 bool HIDSBackend::exportScanReport(std::string& outPath) const
 {
     return impl->scanner.exportReport(outPath);
 }
-
+ 
 bool HIDSBackend::endTask(int pid, std::string& message, const std::string& expectedName)
 {
     std::string name;
     bool isApp = false;
-
+ 
     {
         std::lock_guard<std::mutex> lock(impl->dataMutex);
-
+ 
         for (const BackendProcess& p : impl->processes)
         {
             if (p.pid == pid)
@@ -788,54 +2849,54 @@ bool HIDSBackend::endTask(int pid, std::string& message, const std::string& expe
             }
         }
     }
-
+ 
     if (name.empty())
     {
         message = "That process is no longer running.";
         return false;
     }
-
-    
+ 
+ 
     if (!expectedName.empty() && name != expectedName)
     {
         message = expectedName + " has already closed.";
         return false;
     }
-
+ 
     if (!isApp)
     {
         message = name + " is a system or background process and cannot be ended from here.";
         return false;
     }
-
+ 
     HANDLE handle = OpenProcess(PROCESS_TERMINATE, FALSE, static_cast<DWORD>(pid));
-
+ 
     if (handle == nullptr)
     {
         const DWORD error = GetLastError();
-
+ 
         message = (error == ERROR_ACCESS_DENIED)
             ? "Access denied for " + name + " - run HIDS as Administrator."
             : "Could not open " + name + " (error " + std::to_string(error) + ").";
-
+ 
         return false;
     }
-
+ 
     const BOOL ok = TerminateProcess(handle, 1);
     CloseHandle(handle);
-
+ 
     if (!ok)
     {
         message = "Windows refused to end " + name + ".";
         return false;
     }
-
+ 
     message = "Ended " + name + " (PID " + std::to_string(pid) + ").";
-
-    
+ 
+ 
     {
         std::lock_guard<std::mutex> lock(impl->dataMutex);
-
+ 
         BackendAlert a;
         a.id          = impl->endTaskAlertID++;
         a.time        = NowTimeOfDay();
@@ -843,54 +2904,151 @@ bool HIDSBackend::endTask(int pid, std::string& message, const std::string& expe
         a.source      = "Process Control";
         a.rule        = "Task Ended";
         a.description = "Task Ended - " + message;
-
-        impl->alerts.push_front(a);
-
-        if (impl->alerts.size() > MAX_ALERTS)
-            impl->alerts.pop_back();
+ 
+        impl->insertAlertLocked(a);
     }
-
+ 
     return true;
 }
-
-
-
+ 
+ 
+ 
 bool HIDSBackend::isLockConfigured() const
 {
     return impl->accessLock.isConfigured();
 }
-
+ 
 int HIDSBackend::lockoutSecondsLeft() const
 {
     return impl->accessLock.lockoutSecondsLeft();
 }
-
+ 
 bool HIDSBackend::verifyPassword(const std::string& password, std::string& message)
 {
     return impl->checkPassword(password, message) == PasswordLock::Result::Ok;
 }
-
+ 
 bool HIDSBackend::setPassword(
     const std::string& newPassword,
     const std::string& oldPassword,
     std::string& message)
 {
     const bool changing = impl->accessLock.isConfigured();
-
+ 
     if (changing &&
         impl->checkPassword(oldPassword, message) != PasswordLock::Result::Ok)
     {
         return false;
     }
-
+ 
     if (!impl->accessLock.setPassword(newPassword, message))
         return false;
-
+ 
     message = changing ? "Password changed." : "Password created.";
-
+ 
     impl->pushAccessAlert("Low",
         changing ? "Password Changed" : "Password Created",
         "Access password for Logs & Reports and End Task");
-
+ 
     return true;
+}
+ 
+ 
+ 
+// ------------------------------------------------------------
+// DESKTOP NOTIFICATIONS
+// ------------------------------------------------------------
+ 
+void HIDSBackend::attachWindow(void* nativeWindowHandle)
+{
+    if (impl->notifier || nativeWindowHandle == nullptr)
+        return;
+ 
+    impl->notifier.reset(
+        new DesktopNotifier(static_cast<HWND>(nativeWindowHandle)));
+ 
+    if (!impl->notifier->initialize())
+        impl->notifier.reset();      // no tray icon -> notifications silently disabled
+}
+ 
+void HIDSBackend::flushNotifications()
+{
+    // Keep queued alerts until the notifier is initialized.
+    if (!impl->notifier)
+        return;
+
+    std::deque<Impl::PendingNotice> batch;
+
+    {
+        std::lock_guard<std::mutex> lock(impl->notifyMutex);
+        batch.swap(impl->pendingNotices);
+    }
+
+    if (batch.empty())
+        return;
+
+    if (batch.size() == 1)
+    {
+        impl->notifier->sendAlert(
+            batch.front().title,
+            batch.front().message,
+            batch.front().icon
+        );
+        return;
+    }
+
+    // Select the highest severity in this batch.
+    DWORD icon = NIIF_INFO;
+
+    for (const Impl::PendingNotice& notice : batch)
+    {
+        if (notice.icon == NIIF_ERROR)
+        {
+            icon = NIIF_ERROR;
+            break;
+        }
+
+        if (notice.icon == NIIF_WARNING)
+            icon = NIIF_WARNING;
+    }
+
+    const std::wstring title =
+        L"HIDS - " + std::to_wstring(batch.size()) + L" new alerts";
+
+    impl->notifier->sendAlert(
+        title,
+        batch.back().message,
+        icon
+    );
+}
+ 
+void HIDSBackend::setNotificationsEnabled(bool enabled)
+{
+    impl->notifyEnabled = enabled;
+}
+ 
+bool HIDSBackend::notificationsEnabled() const
+{
+    return impl->notifyEnabled;
+}
+ 
+void HIDSBackend::setNotificationMinSeverity(int rank)
+{
+    impl->notifyMinRank = rank < 0 ? 0 : (rank > 3 ? 3 : rank);
+}
+ 
+int HIDSBackend::notificationMinSeverity() const
+{
+    return impl->notifyMinRank;
+}
+ 
+void HIDSBackend::sendTestNotification()
+{
+    BackendAlert a;
+    a.severity    = "Low";
+    a.source      = "Notifications";
+    a.rule        = "Test";
+    a.description = "Desktop notifications are working.";
+ 
+    impl->queueNotification(a, true);      // bypasses threshold and cooldown
 }

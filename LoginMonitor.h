@@ -2,7 +2,6 @@
 #define LOGINMONITOR_H
 
 #include "Event.h"
-
 #include <string>
 
 class LoginMonitor

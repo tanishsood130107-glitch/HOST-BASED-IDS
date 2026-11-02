@@ -10,9 +10,7 @@ private:
     std::queue<Event> eventQueue;
 
 public:
-    void addEvent(
-        const Event& event
-    );
+    void addEvent(const Event& event);
 
     bool hasEvents() const;
 

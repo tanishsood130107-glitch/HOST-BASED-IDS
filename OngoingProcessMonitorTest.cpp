@@ -139,8 +139,7 @@ int main() {
                     static_cast<unsigned long long>(
                         p.runningSeconds / 60.0);
 
-                std::cout << totalMinutes / 60 << "h "
-                          << totalMinutes % 60 << "m";
+                std::cout<< totalMinutes / 60 << "h "<< totalMinutes % 60 << "m";
             } else {
                 std::cout << "N/A";
             }
@@ -148,11 +147,10 @@ int main() {
             std::cout << '\n';
         }
 
-        std::cout << "\nFull report: processes_report.csv";
-        std::cout << "\nCSV status: "
-                  << (saved ? "Saved" : "Could not save");
-        std::cout << "\nRefresh interval: 2 seconds";
-        std::cout << "\nPress Ctrl+C to stop.\n";
+        std::cout<< "\nFull report: processes_report.csv";
+        std::cout<< "\nCSV status: "<< (saved ? "Saved" : "Could not save");
+        std::cout<< "\nRefresh interval: 2 seconds";
+        std::cout<< "\nPress Ctrl+C to stop.\n";
 
         Sleep(2000);
     }
