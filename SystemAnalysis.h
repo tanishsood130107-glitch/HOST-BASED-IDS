@@ -33,4 +33,4 @@ public:
         const std::vector<ProcessSnapshot>& processes) const;
 };
 
-} // namespace hids_analysis
+} 
