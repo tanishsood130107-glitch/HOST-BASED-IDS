@@ -19,9 +19,7 @@ bool RuleEngine::checkEvent(
     string& matchedRule,
     string& severity)
 {
-    // ========================================================
-    // LOGIN FAILURE
-    // ========================================================
+    
 
     if (event.getEventType() == "LOGIN_FAILURE")
     {
@@ -34,7 +32,7 @@ bool RuleEngine::checkEvent(
 
                 failedLoginTimes.push_back(now);
 
-                // cross out entries older than the window
+                
                 while (
                     !failedLoginTimes.empty() &&
                     std::difftime(
@@ -88,9 +86,6 @@ bool RuleEngine::checkEvent(
         return false;
     }
 
-    // ========================================================
-    // PROCESS START
-    // ========================================================
 
     if (event.getEventType()
         == "PROCESS_START")
@@ -119,10 +114,6 @@ bool RuleEngine::checkEvent(
 
         return false;
     }
-
-    // ========================================================
-    // FILE ACTIVITY
-    // ========================================================
 
     if (
         event.getEventType()
