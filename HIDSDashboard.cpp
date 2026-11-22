@@ -1,13 +1,9 @@
-
-
-
-
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 #include <GLFW/glfw3.h>
 
-// Native window handle (needed for the tray icon / desktop notifications)
+
 #ifdef _WIN32
 #include <windows.h>
 #define GLFW_EXPOSE_NATIVE_WIN32
@@ -26,14 +22,12 @@
 #include <string>
 #include <vector>
 #include "HIDSBackend.h"
-#include "DashboardTheme.h"   // themes, colours, icons, Settings page
+#include "DashboardTheme.h"   
 
 static const float HIDS_PI  = 3.14159265f;
 static const float HIDS_2PI = 6.28318531f;
 
-// ------------------------------------------------------------
-// DATA STRUCTURES
-// ------------------------------------------------------------
+
 
 struct ProcessInfo {
     int pid;
@@ -41,9 +35,9 @@ struct ProcessInfo {
     float cpu;
     float memory;
     double runningSeconds;
-    std::string runningTime;   // formatted for display
-    bool isApp = false;        // can be ended from the Processes page
-    std::string title;         // window title (apps only)
+    std::string runningTime;   
+    bool isApp = false;        
+    std::string title;         
 };
 
 struct AlertInfo {
@@ -53,7 +47,7 @@ struct AlertInfo {
     std::string source;
     std::string description;
 
-    bool        canEndTask = false;   // resource alert with a culprit app
+    bool        canEndTask = false;   
     int         culpritPid = 0;
     std::string culpritName;
     float       culpritMem = 0.0f;
@@ -73,10 +67,10 @@ static std::vector<EventInfo>   loginEvents;
 static std::vector<EventInfo>   fileEvents;
 static BackendAnalysis          analysisData;
 
-// File scanner page state
+
 static ScanStatus               scanStatus;
 static std::vector<ScanFinding> scanFindings;
-static int                      scanTypeSel = 0;      // 0 Quick, 1 Full, 2 Custom
+static int                      scanTypeSel = 0;      
 static char                     scanPath[512] = "";
 static std::string              scanMessage;
 static int processCount = 0;
@@ -84,9 +78,9 @@ static int processCount = 0;
 static int  selectedPage = 0;
 static char processSearch[128] = "";
 static bool monitoringActive = false;
-static double engineStartedAt = -1.0;   // for the "running for" timer
+static double engineStartedAt = -1.0;   
 
-static int  severityFilter = 0;   // 0 = All, 1..4 = Critical..Low
+static int  severityFilter = 0;   
 static const char* severityFilterLabels[] =
     { "All", "Critical", "High", "Medium", "Low" };
 static char alertSearch[128] = "";
@@ -115,7 +109,7 @@ static const char* pageSubtitles[] = {
     "Appearance, interface size, notifications and data source"
 };
 
-// Live metrics (ring buffers feed the sparklines)
+
 static const int HISTORY_SIZE = 60;
 static float cpuHistory[HISTORY_SIZE] = {};
 static float ramHistory[HISTORY_SIZE] = {};
@@ -123,35 +117,29 @@ static int   historyOffset = 0;
 static float cpuNow = 0.0f;
 static float ramNow = 0.0f;
 
-// Threat activity (feeds the dashboard histogram)
+
 static float threatHistory[HISTORY_SIZE] = {};
 static float threatAccum = 0.0f;
 
-// In-app toast shown when a brand-new alert arrives
+
 static std::string toastText;
 static std::string toastSeverity;
 static double      toastAt = -100.0;
 
-// ---- Screen flow: Welcome -> Hub -> Domain -> Feature page ----
+
 enum AppScreen { SCREEN_WELCOME = 0, SCREEN_HUB, SCREEN_DOMAIN, SCREEN_PAGE };
 static int    appScreen       = SCREEN_WELCOME;
 static int    selectedDomain  = 0;
 static double screenChangedAt = 0.0;
 
-static void OpenPage(int page);   // defined after the route tables
+static void OpenPage(int page);   
 
 static float ClampFloat(float v, float lo, float hi)
 {
     return v < lo ? lo : (v > hi ? hi : v);
 }
 
-// ------------------------------------------------------------
-// GRAPHICS HELPERS
-// Small building blocks shared by every screen: colour helpers,
-// animation easing, soft shadows, glass card chrome, usage bars.
-// ------------------------------------------------------------
 
-// Colour with alpha, already converted for the draw list
 static ImU32 Col(const ImVec4& c, float a = 1.0f)
 {
     return ImGui::GetColorU32(WithAlpha(c, a));
@@ -171,8 +159,7 @@ static ImVec2 Off(const ImVec2& p, float x, float y)
     return ImVec2(p.x + x, p.y + y);
 }
 
-// Eases a stored value toward a target (per-window state, keyed by id).
-// Used for hover glows and bar fills so nothing snaps.
+
 static float AnimTo(ImGuiID id, float target, float speed = 12.0f,
                     float initial = -1.0e9f)
 {
@@ -184,8 +171,7 @@ static float AnimTo(ImGuiID id, float target, float speed = 12.0f,
     return v;
 }
 
-// Soft drop shadow made of stacked translucent rounded rects.
-// Must be drawn on the PARENT draw list, before the card's BeginChild.
+
 static void DrawSoftShadow(ImDrawList* d, const ImVec2& a, const ImVec2& b,
                            float rounding, float spread, float alpha)
 {
@@ -203,7 +189,7 @@ static void DrawSoftShadow(ImDrawList* d, const ImVec2& a, const ImVec2& b,
     }
 }
 
-// Glass finish drawn inside a child: sheen, top highlight, tinted border
+
 static void DrawCardChrome(ImDrawList* d, const ImVec2& wp, const ImVec2& ws,
                            const ImVec4& accent, float hover)
 {
@@ -225,8 +211,7 @@ static void DrawCardChrome(ImDrawList* d, const ImVec2& wp, const ImVec2& ws,
                Col(accent, 0.14f + 0.62f * hover), r, 0, 1.0f + 0.7f * hover);
 }
 
-// Rounded usage bar with a glossy highlight and centred label.
-// Fills the width available in the current cell / region.
+
 static void DrawUsageBar(float frac, const char* label, const ImVec4& col,
                          float h = 18.0f)
 {
@@ -263,9 +248,7 @@ static void DrawUsageBar(float frac, const char* label, const ImVec4& col,
     ImGui::Dummy(ImVec2(w, h));
 }
 
-// ------------------------------------------------------------
-// FONT LOADING
-// ------------------------------------------------------------
+
 
 static bool FileExists(const char* path)
 {
@@ -306,11 +289,7 @@ static void LoadFonts(ImGuiIO& io)
     io.FontGlobalScale = 1.25f;
 }
 
-// ------------------------------------------------------------
-// STYLE REFINEMENT
-// Rounded, flat look + tinted borders, table headers, scrollbars.
-// Applied after ApplyTheme(); colours still come from the theme.
-// ------------------------------------------------------------
+
 
 static void RefineStyle()
 {
@@ -337,7 +316,7 @@ static void RefineStyle()
     s.ScrollbarSize     = 10.0f;
     s.GrabMinSize       = 12.0f;
 
-    // Smoother circles / lines everywhere
+    
     s.AntiAliasedLines        = true;
     s.AntiAliasedLinesUseTex  = true;
     s.AntiAliasedFill         = true;
@@ -360,7 +339,7 @@ static void RefineStyle()
     c[ImGuiCol_SliderGrab]       = WithAlpha(COLOR_CYAN, 0.80f);
     c[ImGuiCol_SliderGrabActive] = COLOR_CYAN;
 
-    // Inputs glow softly when hovered / focused
+    
     c[ImGuiCol_FrameBgHovered]   = WithAlpha(COLOR_CYAN, 0.14f);
     c[ImGuiCol_FrameBgActive]    = WithAlpha(COLOR_CYAN, 0.22f);
 }
@@ -414,7 +393,7 @@ static int CountSeverity(const char* severity)
     return count;
 }
 
-// Usage colour: green -> yellow -> red as load rises
+
 static ImVec4 LoadColor(float percent)
 {
     if (percent >= 85.0f) return COLOR_RED;
@@ -423,7 +402,7 @@ static ImVec4 LoadColor(float percent)
     return COLOR_GREEN;
 }
 
-// Section title: glowing accent bar, title, hint, gradient underline
+
 static void SectionHeading(const char* title, const char* hint = nullptr)
 {
     const float fullW = ImGui::GetContentRegionAvail().x;
@@ -465,7 +444,7 @@ static void SectionHeading(const char* title, const char* hint = nullptr)
     ImGui::Spacing();
 }
 
-// Coloured pill, e.g. for alert severity
+
 static void SeverityBadge(const char* severity)
 {
     const ImVec4 color = SeverityColor(severity);
@@ -504,7 +483,6 @@ static void SeverityBadge(const char* severity)
     ImGui::Dummy(size);
 }
 
-// Pulsing dot used by the monitoring status
 static void StatusDot(const ImVec4& color, bool pulse)
 {
     const float radius = 5.0f;
@@ -556,7 +534,7 @@ static float SeverityWeight(const std::string& s)
     return 1.0f;
 }
 
-// Sample rows. Always labelled so they can't be mistaken for real ones.
+
 static void AppendDemoData()
 {
     struct DemoAlert { const char* sev; const char* text; };
@@ -609,7 +587,7 @@ static void RefreshFromBackend()
 
     lastRefresh = now;
 
-    // CPU, RAM and process count
+    
     const BackendStats stats = backend.getStats();
 
     cpuNow = stats.cpuPercent;
@@ -664,7 +642,7 @@ static void RefreshFromBackend()
         alerts.push_back(row);
     }
 
-    // Weigh alerts that appeared since the last refresh (+ raise a toast)
+    
     {
         static std::set<int> seenAlerts;
         static bool seeded = false;
@@ -684,7 +662,7 @@ static void RefreshFromBackend()
         seeded = true;
     }
 
-    // Login and file activity (already newest first)
+    
     loginEvents.clear();
     fileEvents.clear();
 
@@ -706,9 +684,7 @@ static void RefreshFromBackend()
         AppendDemoData();
 }
 
-// ------------------------------------------------------------
-// TOAST - slides in from the right when a new alert is raised
-// ------------------------------------------------------------
+
 
 static void DrawToast()
 {
@@ -742,7 +718,7 @@ static void DrawToast()
     d->AddRectFilled(a, ImVec2(a.x + 5.0f, b.y), Col(sc, k), 14.0f,
         ImDrawFlags_RoundCornersLeft);
 
-    // Icon
+    
     const ImVec2 ic(a.x + 38.0f, a.y + h * 0.5f);
     d->AddCircleFilled(ic, 18.0f, Col(sc, 0.18f * k), 32);
     d->AddCircle(ic, 18.0f, Col(sc, 0.85f * k), 32, 1.5f);
@@ -750,7 +726,7 @@ static void DrawToast()
         Col(sc, k));
     d->AddText(Off(ic, -2.5f, -5.0f), Col(FX_BLACK, 0.9f * k), "!");
 
-    // Text
+    
     char head[64];
     std::snprintf(head, sizeof(head), "NEW ALERT  -  %s", toastSeverity.c_str());
 
@@ -762,15 +738,13 @@ static void DrawToast()
     d->AddText(Off(a, 68.0f, 38.0f), ImGui::GetColorU32(WithAlpha(COLOR_TEXT, k)),
         body.c_str());
 
-    // Time-left bar
+    
     const float left = ClampFloat((float)((life - age) / life), 0.0f, 1.0f);
     d->AddRectFilled(Off(a, 14.0f, h - 5.0f), ImVec2(a.x + 14.0f + (w - 28.0f) * left, b.y - 3.0f),
         Col(sc, 0.65f * k), 2.0f);
 }
 
-// ------------------------------------------------------------
-// METRIC CARD
-// ------------------------------------------------------------
+
 
 static void MetricCard(
     const char* title,
@@ -780,7 +754,7 @@ static void MetricCard(
     float width,
     const float* history = nullptr,
     int linkPage = -1,
-    float gauge = -1.0f)          // 0..100 draws a ring gauge
+    float gauge = -1.0f)          
 {
     const float  cardH = 150.0f;
     const ImVec2 cp    = ImGui::GetCursorScreenPos();
@@ -804,7 +778,7 @@ static void MetricCard(
         const ImVec2 ws = ImGui::GetWindowSize();
         ImDrawList*  d  = ImGui::GetWindowDrawList();
 
-        // soft tint from the left
+        
         d->AddRectFilledMultiColor(
             ImVec2(wp.x + 1.0f, wp.y + 1.0f),
             ImVec2(wp.x + ws.x * 0.70f, wp.y + ws.y - 1.0f),
@@ -815,20 +789,20 @@ static void MetricCard(
 
         DrawCardChrome(d, wp, ws, accent, hv);
 
-        // accent stripe
+        
         d->AddRectFilled(wp, ImVec2(wp.x + 4.0f, wp.y + ws.y),
             ImGui::GetColorU32(accent),
             ImGui::GetStyle().ChildRounding,
             ImDrawFlags_RoundCornersLeft);
 
-        // glow + ring gauge (or page icon) on the right side
+        
         const ImVec2 gc(wp.x + ws.x - 52.0f, wp.y + 60.0f);
 
         DrawGlow(d, gc, 48.0f + 8.0f * hv, accent);
 
         if (gauge >= 0.0f)
         {
-            // tick ring that lights up with the value
+        
             const int ticks = 30;
             const float frac = ClampFloat(gauge / 100.0f, 0.0f, 1.0f);
 
@@ -858,7 +832,7 @@ static void MetricCard(
 
     ImGui::TextDisabled("%s", title);
 
-    // Trend arrow next to the title (sparkline cards only)
+    
     if (history != nullptr)
     {
         const int   last  = (historyOffset + HISTORY_SIZE - 1) % HISTORY_SIZE;
@@ -907,13 +881,13 @@ static void MetricCard(
         ImGui::TextDisabled("%s", subtitle);
     }
 
-    // Hover highlight + click to open the related page
+    
     if (hovered)
     {
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         ImGui::SetTooltip("Open %s", pages[linkPage]);
 
-        // sweeping shine on hover
+        
         {
             const ImVec2 wp = ImGui::GetWindowPos();
             const ImVec2 ws = ImGui::GetWindowSize();
@@ -934,7 +908,7 @@ static void MetricCard(
     ImGui::EndChild();
 }
 
-// Four live cards (used by the dashboard and the home hub)
+
 static void DrawMetrics()
 {
     const float spacing = ImGui::GetStyle().ItemSpacing.x;
@@ -947,7 +921,7 @@ static void DrawMetrics()
     char alertText[16];
     char processText[16];
 
-    // Displayed values glide toward the live ones instead of jumping
+    
     static float cpuShown = 0.0f;
     static float ramShown = 0.0f;
 
@@ -981,9 +955,7 @@ static void DrawMetrics()
     MetricCard("Total alerts", alertText, alertSubtitle, alertColor, cardWidth, nullptr, 4);
 }
 
-// ------------------------------------------------------------
-// NAVIGATION DATA
-// ------------------------------------------------------------
+
 
 struct HidsFeatureRoute
 {
@@ -1054,7 +1026,7 @@ static int DomainOfPage(int page)
     return 0;
 }
 
-// Jump straight to a feature page (from a card, a chart click, ...)
+
 static void OpenPage(int page)
 {
     selectedPage   = page;
@@ -1074,7 +1046,7 @@ static ImVec4 DomainAccent(int d)
     }
 }
 
-// Which page icon represents each domain
+
 static const int domainIconPage[5] = { 0, 4, 6, 5, 8 };
 
 static void StartEngine()
@@ -1086,7 +1058,6 @@ static void StartEngine()
         engineStartedAt = ImGui::GetTime();
 }
 
-// Stopping protection always returns to the welcome screen
 static void StopEngine()
 {
     backend.stop();
@@ -1095,9 +1066,6 @@ static void StopEngine()
     appScreen        = SCREEN_WELCOME;
 }
 
-// ------------------------------------------------------------
-// SHARED UI PIECES
-// ------------------------------------------------------------
 
 static void PushGreenButton()
 {
@@ -1122,7 +1090,7 @@ static void CenteredText(const char* text, float scale, const ImVec4& col)
     ImGui::SetWindowFontScale(1.0f);
 }
 
-// Centred title with a drop shadow and a faint glow halo
+
 static void CenteredTitle(const char* text, float scale, const ImVec4& col)
 {
     ImGui::SetWindowFontScale(scale);
@@ -1143,7 +1111,7 @@ static void CenteredTitle(const char* text, float scale, const ImVec4& col)
     ImGui::SetWindowFontScale(1.0f);
 }
 
-// Centred inside the current content area (use inside panels)
+
 static void CenteredInContent(const char* text, float scale, const ImVec4& col)
 {
     const float avail = ImGui::GetContentRegionAvail().x;
@@ -1155,8 +1123,7 @@ static void CenteredInContent(const char* text, float scale, const ImVec4& col)
     ImGui::SetWindowFontScale(1.0f);
 }
 
-// Draws the hint at the bottom of the window without ever overlapping content
-// (leaves room for the status bar along the very bottom edge)
+
 static void FooterHint(const char* text, float scale = 0.95f)
 {
     const float y = ImGui::GetWindowHeight() - 62.0f;
@@ -1178,7 +1145,7 @@ static void DrawShieldLogo(ImDrawList* d, const ImVec2& c, float s, const ImVec4
     };
     d->AddConvexPolyFilled(shield, 5, ImGui::GetColorU32(col));
 
-    // inner bevel for depth
+    
     ImVec2 inner[5] = {
         ImVec2(c.x - 0.62f * s, c.y - 0.72f * s),
         ImVec2(c.x + 0.62f * s, c.y - 0.72f * s),
@@ -1198,12 +1165,12 @@ static void DrawShieldLogo(ImDrawList* d, const ImVec2& c, float s, const ImVec4
 
 static void DrawLockIcon(ImDrawList* d, const ImVec2& c, float s, const ImVec4& col)
 {
-    // shackle
+    
     d->PathClear();
     d->PathArcTo(ImVec2(c.x, c.y - 0.05f * s), s * 0.60f, HIDS_PI, HIDS_PI * 2.0f, 24);
     d->PathStroke(ImGui::GetColorU32(col), 0, s * 0.26f);
 
-    // body
+    
     d->AddRectFilled(ImVec2(c.x - s * 0.95f, c.y - 0.05f * s),
                      ImVec2(c.x + s * 0.95f, c.y + s * 0.95f),
                      ImGui::GetColorU32(col), s * 0.18f);
@@ -1212,12 +1179,12 @@ static void DrawLockIcon(ImDrawList* d, const ImVec2& c, float s, const ImVec4& 
                      ImVec2(c.x + s * 0.85f, c.y + s * 0.30f),
                      Col(FX_WHITE, 0.16f), s * 0.14f);
 
-    // keyhole
+    
     d->AddCircleFilled(ImVec2(c.x, c.y + s * 0.38f), s * 0.17f,
                        IM_COL32(8, 16, 28, 255), 16);
 }
 
-// Clickable text link (breadcrumbs). Returns true when clicked.
+
 static bool CrumbLink(const char* label, const ImVec4& col)
 {
     ImGui::PushID(label);
@@ -1243,7 +1210,7 @@ static bool CrumbLink(const char* label, const ImVec4& col)
     return clicked;
 }
 
-// Small "value + label" pill. Caller uses SameLine() between chips.
+
 static void StatChip(const char* label, const char* value, const ImVec4& col)
 {
     const ImVec2 vs = ImGui::CalcTextSize(value);
@@ -1274,8 +1241,7 @@ static void StatChip(const char* label, const char* value, const ImVec4& col)
     ImGui::Dummy(ImVec2(w, h));
 }
 
-// Same chip, but it wraps to the next row when it does not fit on the
-// current one (so a row of chips never runs out of the panel).
+
 static void StatChipFlow(const char* label, const char* value,
                          const ImVec4& col, bool first)
 {
@@ -1296,11 +1262,9 @@ static void StatChipFlow(const char* label, const char* value,
     StatChip(label, value, col);
 }
 
-// ############################################################################
-// SECTION 1 - SHARED GRAPHICS HELPERS  (paste after StatChipFlow)
-// ############################################################################
 
-#include <functional>   // (std::hash comes with <string>; harmless)
+
+#include <functional>   
 
 struct DonutSlice
 {
@@ -1309,8 +1273,7 @@ struct DonutSlice
     ImVec4      color;
 };
 
-// Animated segmented ring. Returns the index of the hovered slice, or -1.
-// Reserves a square of (2*radius + 12) at the cursor.
+
 static int DrawDonut(const char* id, const DonutSlice* slices, int n,
                      float radius, float thickness,
                      const char* centerValue, const char* centerLabel)
@@ -1331,7 +1294,7 @@ static int DrawDonut(const char* id, const DonutSlice* slices, int n,
     for (int i = 0; i < n; ++i)
         total += std::max(0.0f, slices[i].value);
 
-    // Which slice is under the mouse? (angle 0 = top, clockwise)
+    
     int hot = -1;
 
     if (hovered && total > 0.0f)
@@ -1360,7 +1323,7 @@ static int DrawDonut(const char* id, const DonutSlice* slices, int n,
 
     const float ringR = radius - thickness * 0.5f;
 
-    // track
+    
     d->AddCircle(c, ringR, Col(FX_WHITE, 0.06f), 64, thickness);
 
     int nonZero = 0;
@@ -1392,7 +1355,7 @@ static int DrawDonut(const char* id, const DonutSlice* slices, int n,
         start += span;
     }
 
-    // centre text (scaled draw-list text, so it works inside any child)
+    
     if (centerValue != nullptr)
     {
         const float  k  = 1.55f;
@@ -1419,7 +1382,6 @@ static int DrawDonut(const char* id, const DonutSlice* slices, int n,
     return hot;
 }
 
-// Coloured dot + label + value (used next to donuts)
 static void LegendRow(const char* label, const char* value, const ImVec4& col)
 {
     const ImVec2 p  = ImGui::GetCursorScreenPos();
@@ -1435,7 +1397,6 @@ static void LegendRow(const char* label, const char* value, const ImVec4& col)
     ImGui::TextColored(col, "%s", value);
 }
 
-// Circular countdown (frac 1 = full, 0 = empty)
 static void DrawCountdownRing(const ImVec2& c, float r, float frac,
                               const ImVec4& col, float thick = 4.0f)
 {
@@ -1453,7 +1414,6 @@ static void DrawCountdownRing(const ImVec2& c, float r, float frac,
     }
 }
 
-// 0 = too short / empty, 1 = weak ... 4 = strong
 static int PasswordStrength(const char* pw)
 {
     const size_t len = std::strlen(pw);
@@ -1478,7 +1438,6 @@ static int PasswordStrength(const char* pw)
     return 1;
 }
 
-// Four-segment strength bar with a label underneath
 static void PasswordStrengthMeter(const char* pw, float width)
 {
     const int    s    = PasswordStrength(pw);
@@ -1508,7 +1467,6 @@ static void PasswordStrengthMeter(const char* pw, float width)
         ImGui::TextDisabled("Strength");
 }
 
-// "...tail of a very long path" / "start of a long name..."
 static std::string ElideFront(const std::string& s, float maxW)
 {
     if (ImGui::CalcTextSize(s.c_str()).x <= maxW)
@@ -1535,7 +1493,7 @@ static std::string ElideBack(const std::string& s, float maxW)
     return t + "...";
 }
 
-// Big selectable card for the scan type (0 quick, 1 full, 2 custom)
+
 static bool ScanModeCard(int kind, const char* title, const char* desc,
                          bool selected, const ImVec4& accent, const ImVec2& size)
 {
@@ -1575,25 +1533,25 @@ static bool ScanModeCard(int kind, const char* title, const char* desc,
 
     const ImU32 iu = ImGui::GetColorU32(accent);
 
-    if (kind == 0)          // lightning bolt
+    if (kind == 0)          
     {
         const ImVec2 bolt[4] = { Off(ic, 3.0f, -10.0f), Off(ic, -5.0f, 1.0f),
                                  Off(ic, 2.0f, 1.0f),   Off(ic, -3.0f, 11.0f) };
         d->AddPolyline(bolt, 4, iu, 0, 2.6f);
     }
-    else if (kind == 1)     // drive / disc
+    else if (kind == 1)     
     {
         d->AddCircle(ic, 10.0f, iu, 24, 2.0f);
         d->AddCircleFilled(ic, 3.0f, iu, 12);
         d->AddLine(ic, Off(ic, 7.0f, -6.0f), iu, 2.0f);
     }
-    else                    // folder
+    else                    
     {
         d->AddRectFilled(Off(ic, -10.0f, -8.0f), Off(ic, -1.0f, -3.0f), Col(accent, 0.5f), 2.0f);
         d->AddRect(Off(ic, -10.0f, -5.0f), Off(ic, 10.0f, 8.0f), iu, 3.0f, 0, 2.0f);
     }
 
-    // texts (clipped to the card)
+    
     const float tx = p.x + 74.0f;
     const float tw = size.x - 74.0f - 36.0f;
 
@@ -1605,7 +1563,7 @@ static bool ScanModeCard(int kind, const char* title, const char* desc,
         ImGui::GetColorU32(COLOR_MUTED), desc, nullptr, tw);
     d->PopClipRect();
 
-    // selected check mark
+    
     if (sel > 0.02f)
     {
         const ImVec2 ck(b.x - 22.0f, p.y + 22.0f);
@@ -1623,7 +1581,7 @@ static bool ScanModeCard(int kind, const char* title, const char* desc,
     return clicked;
 }
 
-// Scan radar with live blips for every finding. Reserves 2*(radius+12) square.
+
 static void DrawScanRadar(float radius, const ImVec4& color, bool active, bool done,
                           const std::vector<ScanFinding>& findings)
 {
@@ -1643,7 +1601,7 @@ static void DrawScanRadar(float radius, const ImVec4& color, bool active, bool d
     d->AddLine(Off(c, -radius, 0.0f), Off(c, radius, 0.0f), Col(color, 0.16f), 1.0f);
     d->AddLine(Off(c, 0.0f, -radius), Off(c, 0.0f, radius), Col(color, 0.16f), 1.0f);
 
-    // outer tick ring (turns while scanning)
+    
     for (int i = 0; i < 60; ++i)
     {
         const float a  = (float)i * HIDS_2PI / 60.0f + (active ? t * 0.25f : 0.0f);
@@ -1692,7 +1650,7 @@ static void DrawScanRadar(float radius, const ImVec4& color, bool active, bool d
         d->AddCircleFilled(c, radius * 0.09f, Col(color, 0.8f), 16);
     }
 
-    // one blip per finding (stable position from the file path)
+    
     const std::size_t n = std::min<std::size_t>(findings.size(), 60);
 
     for (std::size_t i = 0; i < n; ++i)
@@ -1711,8 +1669,6 @@ static void DrawScanRadar(float radius, const ImVec4& color, bool active, bool d
     ImGui::Dummy(ImVec2((radius + pad) * 2.0f, (radius + pad) * 2.0f));
 }
 
-
-// Friendly animated graphic for pages / tables with nothing to show
 static void EmptyState(const char* title, const char* hint, const ImVec4& col)
 {
     const float avail = ImGui::GetContentRegionAvail().x;
@@ -1733,7 +1689,7 @@ static void EmptyState(const char* title, const char* hint, const ImVec4& col)
     d->AddCircle(c, 36.0f + phase * 22.0f,  Col(col, 0.35f * (1.0f - phase)),  48, 1.4f);
     d->AddCircle(c, 36.0f + phase2 * 22.0f, Col(col, 0.25f * (1.0f - phase2)), 48, 1.2f);
 
-    // little orbiting satellites
+    
     for (int i = 0; i < 3; ++i)
     {
         const float a = t * 0.9f + (float)i * (HIDS_2PI / 3.0f);
@@ -1756,12 +1712,11 @@ static void EmptyState(const char* title, const char* hint, const ImVec4& col)
     CenteredInContent(hint, 1.0f, COLOR_MUTED);
 }
 
-// Panel used by every inner page: glass card with shadow, a coloured top
-// line and a soft gradient. Always pair with ImGui::EndChild().
+
 static void BeginPanel(const char* id, const ImVec2& size,
                        const ImVec4& accent, bool noScroll = false)
 {
-    // Resolve the real size so the shadow can be drawn first
+    
     ImVec2 sz = size;
     const ImVec2 av = ImGui::GetContentRegionAvail();
 
@@ -1790,7 +1745,7 @@ static void BeginPanel(const char* id, const ImVec2& size,
 
     DrawCardChrome(d, wp, ws, accent, 0.0f);
 
-    // glowing top line (fades toward the right)
+    
     d->AddRectFilledMultiColor(
         ImVec2(wp.x + 16.0f, wp.y),
         ImVec2(wp.x + ws.x - 16.0f, wp.y + 2.5f),
@@ -1802,7 +1757,7 @@ static void BeginPanel(const char* id, const ImVec2& size,
         Col(accent, 0.22f), Col(accent, 0.0f), Col(accent, 0.0f), Col(accent, 0.0f));
 }
 
-// Logo tile + product name. Returns true when clicked (-> welcome screen).
+
 static bool DrawBrand(bool clickable = false)
 {
     ImDrawList* d = ImGui::GetWindowDrawList();
@@ -1821,7 +1776,7 @@ static bool DrawBrand(bool clickable = false)
     const ImVec2 c(p.x + s * 0.5f, p.y + s * 0.5f + 0.5f);
     DrawShieldLogo(d, c, 11.0f, COLOR_CYAN);
 
-    // slow scanning arc around the tile
+    
     d->PathClear();
     d->PathArcTo(c, s * 0.62f, t * 1.4f, t * 1.4f + 0.9f, 16);
     d->PathStroke(Col(COLOR_CYAN, 0.55f), 0, 1.6f);
@@ -1854,7 +1809,7 @@ static bool DrawBrand(bool clickable = false)
     return false;
 }
 
-// Right-aligned engine status + Start/Stop button on a glass capsule
+
 static void DrawHeaderStatus(float topY)
 {
     const ImVec4 col = monitoringActive ? COLOR_GREEN : COLOR_YELLOW;
@@ -1868,7 +1823,7 @@ static void DrawHeaderStatus(float topY)
 
     ImGui::SetCursorPos(ImVec2(x, topY));
 
-    // capsule behind the status + button
+    
     {
         const ImVec2 p = ImGui::GetCursorScreenPos();
         const float  h = ImGui::GetFrameHeight();
@@ -1903,8 +1858,7 @@ static void DrawHeaderStatus(float topY)
     }
 }
 
-// Drifting aurora glows, a reactive dot grid, a cursor halo, a vignette
-// and (while protection runs) a slow scan band behind every screen
+
 static void DrawAmbient()
 {
     ImDrawList*  bg   = ImGui::GetBackgroundDrawList();
@@ -1959,7 +1913,7 @@ static void DrawAmbient()
         }
     }
 
-    // slow scan band while protection is running
+    
     if (monitoringActive)
     {
         const float ph   = std::fmod(t * 0.09f, 1.0f);
@@ -1974,7 +1928,7 @@ static void DrawAmbient()
             Col(COLOR_GREEN, 0.0f), Col(COLOR_GREEN, 0.0f));
     }
 
-    // Vignette
+    
     {
         const ImU32 dark = IM_COL32(0, 0, 0, 90);
         const ImU32 none = IM_COL32(0, 0, 0, 0);
@@ -1988,8 +1942,7 @@ static void DrawAmbient()
     }
 }
 
-// Header of a feature page: Back button, breadcrumb, icon, title.
-// No sidebar - just this feature and the way back.
+
 static void DrawPageHeader()
 {
     const int    domain = DomainOfPage(selectedPage);
@@ -2008,7 +1961,7 @@ static void DrawPageHeader()
     const ImVec2 ws = ImGui::GetWindowSize();
     ImDrawList*  d  = ImGui::GetWindowDrawList();
 
-    // Card background: gradient + accent line along the bottom
+    
     d->AddRectFilledMultiColor(
         ImVec2(wp.x + 1.0f, wp.y + 1.0f), ImVec2(wp.x + ws.x - 1.0f, wp.y + ws.y - 1.0f),
         Col(accent, 0.18f),
@@ -2016,7 +1969,7 @@ static void DrawPageHeader()
         Col(accent, 0.0f),
         Col(accent, 0.06f));
 
-    // Big faint watermark of the page icon on the right
+    
     DrawPageIcon(d, ImVec2(wp.x + ws.x - 130.0f, wp.y + ws.y * 0.55f), 46.0f,
         selectedPage, Col(accent, 0.07f));
 
@@ -2030,7 +1983,7 @@ static void DrawPageHeader()
         Col(accent, 0.0f),
         Col(accent, 0.90f));
 
-    // Light comet travelling along the bottom line
+    
     {
         const float x0  = wp.x + 16.0f;
         const float x1  = wp.x + ws.x - 16.0f;
@@ -2048,7 +2001,7 @@ static void DrawPageHeader()
     const float topY = ImGui::GetCursorPosY();
     const float lh   = ImGui::GetTextLineHeight();
 
-    // Row 1: Back + breadcrumb (all on one baseline)
+    
     if (ImGui::Button("<  Back", ImVec2(96.0f, 32.0f)))
     {
         selectedDomain = domain;
@@ -2087,7 +2040,7 @@ static void DrawPageHeader()
 
     DrawHeaderStatus(topY);
 
-    // Row 2: icon + title + subtitle
+    
     {
         const ImVec2 ic(wp.x + padX + 30.0f, wp.y + topY + 46.0f + 31.0f);
 
@@ -2095,7 +2048,7 @@ static void DrawPageHeader()
         d->AddCircleFilled(ic, 28.0f, Col(accent, 0.18f), 48);
         d->AddCircle(ic, 28.0f, Col(accent, 0.80f), 48, 1.6f);
 
-        // two rotating arcs around the icon
+        
         d->PathClear();
         d->PathArcTo(ic, 34.0f, t * 1.2f, t * 1.2f + 1.3f, 20);
         d->PathStroke(Col(accent, 0.85f), 0, 2.2f);
@@ -2118,7 +2071,7 @@ static void DrawPageHeader()
     ImGui::EndChild();
 }
 
-// Call-to-action shown on the dashboard only while protection is off
+
 static void DrawEngineBanner()
 {
     if (monitoringActive)
@@ -2132,7 +2085,7 @@ static void DrawEngineBanner()
     const ImVec2 wp = ImGui::GetWindowPos();
     ImDrawList*  d  = ImGui::GetWindowDrawList();
 
-    // warning beacon
+    
     {
         const ImVec2 c(wp.x + 48.0f, wp.y + 52.0f);
         const float  ph = std::fmod(t * 0.8f, 1.0f);
@@ -2171,7 +2124,6 @@ static void DrawEngineBanner()
     ImGui::Spacing();
 }
 
-// Shown on the dashboard while protection runs: overall threat level
 static void DrawPostureBanner()
 {
     if (!monitoringActive)
@@ -2236,7 +2188,7 @@ static void DrawPostureBanner()
     const float rightX1 = std::max(240.0f, ws.x - ImGui::CalcTextSize(l1).x - 24.0f);
     const float rightX2 = std::max(240.0f, ws.x - ImGui::CalcTextSize(l2).x - 24.0f);
 
-    // Heartbeat line between the level text and the right-hand stats
+    
     {
         const float x0 = wp.x + 290.0f;
         const float x1 = wp.x + std::min(rightX1, rightX2) - 30.0f;
@@ -2276,12 +2228,7 @@ static void DrawPostureBanner()
     ImGui::Spacing();
 }
 
-// ------------------------------------------------------------
-// WELCOME SCREEN
-// Reachable at any time. Shows whether HIDS is working.
-// ------------------------------------------------------------
 
-// Glass stat tile used on the welcome screen
 static void DrawMiniStat(const char* label, const char* value,
                          const ImVec4& col, float w)
 {
@@ -2308,7 +2255,7 @@ static void DrawMiniStat(const char* label, const char* value,
     ImGui::Dummy(ImVec2(w, h));
 }
 
-// Row of the five security areas at the bottom of the welcome screen
+
 static void DrawDomainChips()
 {
     const int   n      = IM_ARRAYSIZE(hidsDomains);
@@ -2355,7 +2302,7 @@ static void DrawWelcomeScreen()
     if (monitoringActive && engineStartedAt < 0.0)
         engineStartedAt = now;
 
-    // Floating particles
+    
     for (int i = 0; i < 56; ++i)
     {
         const float fx = std::fmod(i * 0.6180339f, 1.0f);
@@ -2366,17 +2313,17 @@ static void DrawWelcomeScreen()
             Col(acc, a));
     }
 
-    // Soft glow
+    
     DrawGlow(bg, c, 190.0f, acc);
 
-    // Radar grid
+    
     for (int k = 1; k <= 4; ++k)
         bg->AddCircle(c, 70.0f + (float)k * 62.0f, Col(acc, 0.065f), 120, 1.0f);
 
     bg->AddLine(ImVec2(c.x - 320.0f, c.y), ImVec2(c.x + 320.0f, c.y), Col(acc, 0.05f), 1.0f);
     bg->AddLine(ImVec2(c.x, c.y - 320.0f), ImVec2(c.x, c.y + 320.0f), Col(acc, 0.05f), 1.0f);
 
-    // Radar sweep with a fading trail
+    
     {
         const float sweep = t * 0.9f;
         const float R     = 318.0f;
@@ -2396,8 +2343,7 @@ static void DrawWelcomeScreen()
 
         bg->AddLine(c, ImVec2(c.x + std::cos(sweep) * R, c.y + std::sin(sweep) * R),
             Col(acc, 0.40f), 1.5f);
-
-        // Blips that flash as the sweep passes
+        
         for (int i = 0; i < 7; ++i)
         {
             const float ba = (float)i * 2.399f;
@@ -2419,7 +2365,7 @@ static void DrawWelcomeScreen()
         }
     }
 
-    // Expanding radar rings
+    
     for (int k = 0; k < 3; ++k)
     {
         const float phase  = std::fmod(t * 0.30f + k / 3.0f, 1.0f);
@@ -2429,7 +2375,7 @@ static void DrawWelcomeScreen()
             Col(acc, 0.28f * (1.0f - phase)), 96, 1.6f);
     }
 
-    // Logo badge + rotating arcs
+    
     bg->AddCircleFilled(c, 64.0f, Col(acc, 0.12f), 64);
     bg->AddCircle(c, 64.0f, Col(acc, 0.55f), 64, 1.5f);
 
@@ -2443,7 +2389,7 @@ static void DrawWelcomeScreen()
 
     DrawShieldLogo(bg, c, 30.0f, acc);
 
-    // Text block
+    
     ImGui::SetCursorPosY(c.y + 100.0f);
 
     CenteredTitle("HIDS", 3.0f, COLOR_TEXT);
@@ -2452,7 +2398,7 @@ static void DrawWelcomeScreen()
 
     if (monitoringActive)
     {
-        // ---- HIDS is working ----
+        
         const char* label = "HIDS IS WORKING  -  this host is being monitored";
         const float tw    = ImGui::CalcTextSize(label).x;
         const float pillW = tw + 56.0f;
@@ -2479,7 +2425,7 @@ static void DrawWelcomeScreen()
         ImGui::Dummy(ImVec2(pillW, pillH));
         ImGui::Dummy(ImVec2(0.0f, 6.0f));
 
-        // Live stat tiles
+        
         {
             const float gap   = 12.0f;
             const int   count = 5;
@@ -2521,7 +2467,7 @@ static void DrawWelcomeScreen()
 
     ImGui::Dummy(ImVec2(0.0f, 22.0f));
 
-    // ---- Buttons ----
+    
     bool openConsole = false;
 
     const ImVec2 mainBtn(monitoringActive ? 250.0f : 280.0f, 58.0f);
@@ -2542,7 +2488,7 @@ static void DrawWelcomeScreen()
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(3);
 
-    // Pulsing halo around the main button
+    
     {
         const ImVec2 a = ImGui::GetItemRectMin();
         const ImVec2 b = ImGui::GetItemRectMax();
@@ -2575,7 +2521,7 @@ static void DrawWelcomeScreen()
         ImGui::SetWindowFontScale(1.25f);
 
         if (ImGui::Button("Stop protection", stopBtn))
-            StopEngine();            // stays on the welcome screen
+            StopEngine();            
 
         ImGui::SetWindowFontScale(1.0f);
         ImGui::PopStyleVar();
@@ -2584,7 +2530,7 @@ static void DrawWelcomeScreen()
 
     ImGui::Dummy(ImVec2(0.0f, 6.0f));
 
-    // Skip link (only while protection is off)
+    
     if (!monitoringActive)
     {
         const char* skip = "Open dashboard without starting protection";
@@ -2611,7 +2557,7 @@ static void DrawWelcomeScreen()
     if (openConsole)
         appScreen = SCREEN_HUB;
 
-    // Footer: the five areas + version
+    
     {
         const float y = ImGui::GetWindowHeight() - 100.0f;
 
@@ -2623,9 +2569,7 @@ static void DrawWelcomeScreen()
     }
 }
 
-// ------------------------------------------------------------
-// Shared card used by the hub and the domain screens.
-// ------------------------------------------------------------
+
 static bool HubCard(
     const char* id, const char* title, const char* desc, const char* footer,
     int iconPage, const ImVec4& accent, const ImVec2& size,
@@ -2649,7 +2593,7 @@ static bool HubCard(
     const float  rounding = ImGui::GetStyle().ChildRounding;
     const float  t = (float)ImGui::GetTime();
 
-    // Soft tint fading down from the top
+    
     d->AddRectFilledMultiColor(
         ImVec2(wp.x + 1.0f, wp.y + 4.0f),
         ImVec2(wp.x + ws.x - 1.0f, wp.y + ws.y * 0.62f),
@@ -2658,7 +2602,7 @@ static bool HubCard(
         Col(accent, 0.0f),
         Col(accent, 0.0f));
 
-    // Decorative rings in the top-right corner (breathe on hover)
+    
     for (int k = 0; k < 3; ++k)
         d->AddCircle(ImVec2(wp.x + ws.x - 26.0f, wp.y + 30.0f),
             34.0f + k * 22.0f + hov * 6.0f * (float)(k + 1),
@@ -2666,18 +2610,18 @@ static bool HubCard(
 
     DrawCardChrome(d, wp, ws, accent, hov);
 
-    // Accent bar across the top
+    
     d->AddRectFilled(wp, ImVec2(wp.x + ws.x, wp.y + 4.0f),
         ImGui::GetColorU32(accent), rounding, ImDrawFlags_RoundCornersTop);
 
-    // Icon badge
+    
     const ImVec2 ic(wp.x + 22.0f + 32.0f, wp.y + 26.0f + 32.0f);
 
     DrawGlow(d, ic, 62.0f + 22.0f * hov, accent);
     d->AddCircleFilled(ic, 32.0f, Col(accent, 0.16f + 0.16f * hov), 48);
     d->AddCircle(ic, 32.0f, Col(accent, 0.75f), 48, 1.6f);
 
-    // orbiting spark on the icon ring
+    
     {
         const float a = t * (0.8f + 1.4f * hov) + (float)(iconPage * 1.3f);
         d->AddCircleFilled(ImVec2(ic.x + std::cos(a) * 32.0f, ic.y + std::sin(a) * 32.0f),
@@ -2686,7 +2630,7 @@ static bool HubCard(
 
     DrawPageIcon(d, ic, 15.0f, iconPage, ImGui::GetColorU32(accent));
 
-    // Live badge (top-right)
+    
     if (badge != nullptr)
     {
         const ImVec2 bs = ImGui::CalcTextSize(badge);
@@ -2702,7 +2646,7 @@ static bool HubCard(
             ImGui::GetColorU32(badgeCol), badge);
     }
 
-    // Text (wrapped inside the card so it never overlaps the footer)
+    
     ImGui::SetCursorPos(ImVec2(18.0f, 26.0f + 64.0f + 14.0f));
     ImGui::BeginGroup();
     ImGui::PushTextWrapPos(ws.x - 18.0f);
@@ -2718,7 +2662,7 @@ static bool HubCard(
     ImGui::PopTextWrapPos();
     ImGui::EndGroup();
 
-    // Footer: label on the left, arrow badge on the right
+    
     ImGui::SetCursorPos(ImVec2(18.0f, ws.y - 38.0f));
     ImGui::TextColored(accent, "%s", footer);
 
@@ -2737,7 +2681,7 @@ static bool HubCard(
         d->AddPolyline(arrow, 3, ImGui::GetColorU32(accent), 0, 2.0f);
     }
 
-    // Click + shine sweep
+    
     if (isHov)
     {
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
@@ -2760,7 +2704,7 @@ static bool HubCard(
     return clicked;
 }
 
-// "HIDS IS WORKING / STOPPED" pill (hub)
+
 static void DrawStatusPill()
 {
     const ImVec4 col   = monitoringActive ? COLOR_GREEN : COLOR_YELLOW;
@@ -2791,9 +2735,6 @@ static void DrawStatusPill()
     ImGui::Dummy(ImVec2(pillW, pillH));
 }
 
-// ------------------------------------------------------------
-// HOME HUB - one big card per security domain + live metrics
-// ------------------------------------------------------------
 static void DrawHubScreen()
 {
     RefreshFromBackend();
@@ -2821,7 +2762,7 @@ static void DrawHubScreen()
     DrawStatusPill();
     ImGui::Dummy(ImVec2(0.0f, 14.0f));
 
-    // Card grid
+
     const int   count = IM_ARRAYSIZE(hidsDomains);
     const float gap   = 16.0f;
     const float avail = ImGui::GetContentRegionAvail().x;
@@ -2842,7 +2783,7 @@ static void DrawHubScreen()
         std::snprintf(footer, sizeof(footer), "%d feature%s",
             dom.featureCount, dom.featureCount == 1 ? "" : "s");
 
-        // Live badge: engine state on Monitoring, alert count on Threat Detection
+        
         char        badgeText[32] = "";
         const char* badge         = nullptr;
         ImVec4      badgeCol      = COLOR_CYAN;
@@ -2874,7 +2815,6 @@ static void DrawHubScreen()
 
     ImGui::Dummy(ImVec2(0.0f, 4.0f));
 
-    // Live metrics strip (only if there is room; otherwise a text summary)
     if (ImGui::GetContentRegionAvail().y >= 210.0f)
     {
         ImGui::TextDisabled("LIVE STATUS");
@@ -2893,9 +2833,6 @@ static void DrawHubScreen()
     FooterHint("Click an area to open it   -   Esc goes back to the welcome screen");
 }
 
-// ------------------------------------------------------------
-// DOMAIN SCREEN - the features inside one domain
-// ------------------------------------------------------------
 static void DrawDomainScreen()
 {
     RefreshFromBackend();
@@ -2934,7 +2871,6 @@ static void DrawDomainScreen()
     ImGui::Separator();
     ImGui::Dummy(ImVec2(0.0f, 16.0f));
 
-    // Domain banner
     {
         const ImVec2 p = ImGui::GetCursorScreenPos();
         const ImVec2 ic(p.x + 36.0f, p.y + 36.0f);
@@ -2967,7 +2903,6 @@ static void DrawDomainScreen()
 
     ImGui::Dummy(ImVec2(0.0f, 20.0f));
 
-    // Feature cards
     const float gap   = 16.0f;
     const float avail = ImGui::GetContentRegionAvail().x;
     const int   cols  = 3;
@@ -3005,10 +2940,6 @@ static void DrawDomainScreen()
 
     FooterHint("Click a feature to open it   -   Esc goes back");
 }
-
-// ------------------------------------------------------------
-// Entry point for every screen that is NOT a feature page
-// ------------------------------------------------------------
 static void DrawFullScreen()
 {
     const float fade = ClampFloat(
@@ -3021,15 +2952,6 @@ static void DrawFullScreen()
 
     ImGui::PopStyleVar();
 }
-
-// ============================================================
-// DASHBOARD WIDGETS
-// ============================================================
-
-// ############################################################################
-// SECTION 2 - THREAT PANEL  (replaces DrawThreatPanel)
-// Bar chart  +  severity donut (click a slice)  +  clickable severity bars
-// ############################################################################
 
 static void DrawThreatPanel()
 {
@@ -3049,7 +2971,7 @@ static void DrawThreatPanel()
     DrawBarChart("##threat", threatHistory, HISTORY_SIZE, historyOffset,
         peak, ImVec2(availW * 0.46f, 140.0f));
 
-    // ---- donut of the current alert mix ----
+    
     ImGui::SameLine(0.0f, 18.0f);
 
     int counts[4];
@@ -3074,7 +2996,7 @@ static void DrawThreatPanel()
         OpenPage(4);
     }
 
-    // ---- clickable severity bars ----
+
     ImGui::SameLine(0.0f, 18.0f);
     ImGui::BeginGroup();
 
@@ -3143,13 +3065,7 @@ static void DrawThreatPanel()
     ImGui::EndChild();
 }
 
-
-
-// ------------------------------------------------------------
-// PASSWORD LOCK (Logs & Reports page and End Task)
-// ------------------------------------------------------------
-
-static const double LOCK_IDLE_SECONDS = 300.0;     // auto-lock after 5 min idle
+static const double LOCK_IDLE_SECONDS = 300.0;     
 static const int    LOGS_PAGE_INDEX   = 5;
 
 static bool        logsUnlocked   = false;
@@ -3163,10 +3079,8 @@ static bool        lockMessageOk   = false;
 
 static void Wipe(char* buffer, std::size_t size)
 {
-    std::memset(buffer, 0, size);
+    std::memset(buffer, 0, size)
 }
-
-// Locks Logs & Reports again and clears typed credentials
 static void LockLogs()
 {
     logsUnlocked = false;
@@ -3177,7 +3091,6 @@ static void LockLogs()
     Wipe(lockEntry, sizeof(lockEntry));
 }
 
-// Detects screen / page changes: drives the fade and re-locks Logs & Reports
 static void TrackScreenChange()
 {
     static int prevScreen = -1;
@@ -3198,7 +3111,6 @@ static void TrackScreenChange()
     screenChangedAt = ImGui::GetTime();
 }
 
-// Esc: page -> domain -> hub -> welcome
 static void HandleBackKey()
 {
     if (!ImGui::IsKeyPressed(ImGuiKey_Escape, false))
@@ -3223,17 +3135,11 @@ static void HandleBackKey()
     }
 }
 
-// ############################################################################
-// SECTION 3 - PASSWORD LOCK
-// ############################################################################
+static double lockShakeAt = -100.0;   
+static double lockOkAt    = -100.0;   
+static bool   lockShowPw  = false;    
 
-// (3a) add these three lines right after:  static bool lockMessageOk = false;
-static double lockShakeAt = -100.0;   // last wrong password / error (shake)
-static double lockOkAt    = -100.0;   // last successful unlock (flash)
-static bool   lockShowPw  = false;    // "show password" toggle
 
-// (3b) replaces DrawSetPasswordForm - now with show toggle, strength meter and
-//      live "passwords match" hint. Still returns true on the frame it is created.
 static bool DrawSetPasswordForm()
 {
     bool created = false;
@@ -3294,7 +3200,7 @@ static bool DrawSetPasswordForm()
     return created;
 }
 
-// (3c) replaces DrawLockScreen - a "vault" screen
+
 static void DrawLockScreen()
 {
     const double now         = ImGui::GetTime();
@@ -3313,7 +3219,7 @@ static void DrawLockScreen()
     const ImVec2 ws = ImGui::GetWindowSize();
     ImDrawList*  d  = ImGui::GetWindowDrawList();
 
-    // drifting particles behind everything
+    
     d->PushClipRect(wp, ImVec2(wp.x + ws.x, wp.y + ws.y), true);
 
     for (int i = 0; i < 30; ++i)
@@ -3330,7 +3236,7 @@ static void DrawLockScreen()
 
     ImGui::Dummy(ImVec2(0.0f, 14.0f));
 
-    // ---- vault graphic ----
+    
     {
         const ImVec2 p = ImGui::GetCursorScreenPos();
         const ImVec2 c(wp.x + ws.x * 0.5f, p.y + 90.0f);
@@ -3343,7 +3249,7 @@ static void DrawLockScreen()
             d->AddCircle(c, 56.0f + ph * 26.0f, Col(accent, 0.30f * (1.0f - ph)), 64, 1.4f);
         }
 
-        // rotating tick ring (turns faster when locked out)
+        
         const float spin = t * (wait > 0 ? 1.2f : 0.35f);
 
         for (int i = 0; i < 48; ++i)
@@ -3374,7 +3280,7 @@ static void DrawLockScreen()
         ImGui::Dummy(ImVec2(0.0f, 186.0f));
     }
 
-    // ---- title ----
+    
     CenteredTitle(firstTime ? "Set up your vault password" : "Logs & Reports are locked",
         1.7f, COLOR_TEXT);
 
@@ -3385,7 +3291,7 @@ static void DrawLockScreen()
 
     ImGui::Dummy(ImVec2(0.0f, 16.0f));
 
-    // ---- form (centred with Indent) ----
+    
     const float formW = 372.0f;
     const float x0    = std::max(0.0f, (ImGui::GetContentRegionAvail().x - formW) * 0.5f);
 
@@ -3395,7 +3301,7 @@ static void DrawLockScreen()
     {
         if (DrawSetPasswordForm())
         {
-            logsUnlocked = true;          // whoever creates it is let in
+            logsUnlocked = true;          
             lockOkAt     = now;
         }
     }
@@ -3447,7 +3353,7 @@ static void DrawLockScreen()
 
     ImGui::Unindent(x0);
 
-    // ---- messages ----
+
     if (wait > 0)
     {
         char line[96];
@@ -3469,9 +3375,6 @@ static void DrawLockScreen()
     ImGui::EndChild();
 }
 
-
-
-// true = unlocked, the page may draw its content
 static bool LogsGate()
 {
     const double now = ImGui::GetTime();
@@ -3499,22 +3402,20 @@ static bool LogsGate()
     return false;
 }
 
-// ------------------------------------------------------------
-// END TASK (shared by the Processes page and resource alerts)
-// ------------------------------------------------------------
+
 
 static const float HIGH_MEMORY_MB = 500.0f;
 
 static bool        procAppsOnly     = false;
 static bool        procHighMemOnly  = false;
-static std::string procMessage;                 // result of the last End Task
+static std::string procMessage;                 
 static bool        procMessageOk    = true;
 static int         pendingPid       = 0;
 static std::string pendingName;
 static float       pendingMem       = 0.0f;
-static int         pendingAlertID   = 0;        // 0 = started from the Processes page
+static int         pendingAlertID   = 0;        
 static bool        openEndTaskPopup = false;
-static std::set<int> handledAlertIDs;           // alerts whose app was ended
+static std::set<int> handledAlertIDs;           
 
 static char        endPassword[64] = "";
 static std::string endPopupMessage;
@@ -3540,7 +3441,7 @@ static void DrawEndTaskPopup()
     if (ImGui::BeginPopupModal("Confirm End Task", nullptr,
             ImGuiWindowFlags_AlwaysAutoResize))
     {
-        // Red warning strip across the top of the dialog
+        
         {
             const ImVec2 wp = ImGui::GetWindowPos();
             const ImVec2 ws = ImGui::GetWindowSize();
@@ -3635,9 +3536,7 @@ static void DrawEndTaskPopup()
     }
 }
 
-// ------------------------------------------------------------
-// ALERT TABLE
-// ------------------------------------------------------------
+
 
 static void DrawAlerts(bool compact)
 {
@@ -3647,7 +3546,7 @@ static void DrawAlerts(bool compact)
         compact ? "Recent security alerts" : "All security alerts"
     );
 
-    // Severity filter (with counts) + search (full page only)
+    
     if (!compact)
     {
         for (int i = 0; i < IM_ARRAYSIZE(severityFilterLabels); ++i)
@@ -3671,7 +3570,7 @@ static void DrawAlerts(bool compact)
 
             ImGui::PopStyleColor(3);
 
-            // underline glow under the active filter
+            
             if (active)
             {
                 const ImVec2 a = ImGui::GetItemRectMin();
@@ -3700,7 +3599,7 @@ static void DrawAlerts(bool compact)
 
     DrawEndTaskPopup();
 
-    // Rows that pass the filters
+    
     std::vector<const AlertInfo*> rows;
 
     for (const AlertInfo& alert : alerts)
@@ -3753,7 +3652,7 @@ static void DrawAlerts(bool compact)
 
             ImGui::TableNextRow();
 
-            // Critical / High rows get a faint severity wash
+            
             if (alert.severity == "Critical")
                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, Col(sc, 0.11f));
             else if (alert.severity == "High")
@@ -3765,7 +3664,7 @@ static void DrawAlerts(bool compact)
                 const float  cy = p.y + ImGui::GetTextLineHeight() * 0.5f;
                 ImDrawList*  d  = ImGui::GetWindowDrawList();
 
-                // coloured stripe on the left edge of the row
+                
                 d->AddRectFilled(
                     ImVec2(p.x - ImGui::GetStyle().CellPadding.x, p.y - ImGui::GetStyle().CellPadding.y),
                     ImVec2(p.x - ImGui::GetStyle().CellPadding.x + 3.0f,
@@ -3788,7 +3687,7 @@ static void DrawAlerts(bool compact)
             ImGui::TableSetColumnIndex(3);
             ImGui::TextWrapped("%s", alert.description.c_str());
 
-            // Resource alerts can offer End Task for the app causing them
+            
             ImGui::TableSetColumnIndex(4);
 
             if (alert.canEndTask)
@@ -3830,9 +3729,7 @@ static void DrawAlerts(bool compact)
     ImGui::EndChild();
 }
 
-// ------------------------------------------------------------
-// PROCESS TABLE
-// ------------------------------------------------------------
+
 
 static void DrawProcesses()
 {
@@ -3841,7 +3738,7 @@ static void DrawProcesses()
     SectionHeading("Running processes",
         "apps can be ended here; system and background processes are protected");
 
-    // Summary chips
+    
     {
         int apps = 0;
         int high = 0;
@@ -3985,7 +3882,7 @@ static void DrawProcesses()
             ImGui::TableSetColumnIndex(0);
             ImGui::TextDisabled("%d", process.pid);
 
-            // Name with a small coloured initial tile
+            
             ImGui::TableSetColumnIndex(1);
             {
                 static const ImVec4* palette[5] = {
@@ -4025,7 +3922,7 @@ static void DrawProcesses()
                 ImGui::TextDisabled("- %s", process.title.c_str());
             }
 
-            // CPU bar
+            
             ImGui::TableSetColumnIndex(2);
 
             {
@@ -4036,7 +3933,7 @@ static void DrawProcesses()
                     LoadColor(process.cpu * 4.0f), 18.0f);
             }
 
-            // Memory: yellow when high, red when very high
+            
             ImGui::TableSetColumnIndex(3);
 
             if (process.memory >= HIGH_MEMORY_MB * 2.0f)
@@ -4049,7 +3946,7 @@ static void DrawProcesses()
             ImGui::TableSetColumnIndex(4);
             ImGui::TextDisabled("%s", process.runningTime.c_str());
 
-            // Only apps (windowed programs) get an End Task button
+            
             ImGui::TableSetColumnIndex(5);
 
             if (process.isApp)
@@ -4093,9 +3990,6 @@ static void DrawProcesses()
     ImGui::EndChild();
 }
 
-// ------------------------------------------------------------
-// EVENT PAGE
-// ------------------------------------------------------------
 
 static ImVec4 EventColor(const std::string& type)
 {
@@ -4157,7 +4051,7 @@ static void DrawEventPage(
             ImGui::TableSetColumnIndex(0);
             ImGui::TextDisabled("%s", event.time.c_str());
 
-            // Event type as a coloured chip
+            
             ImGui::TableSetColumnIndex(1);
             {
                 const ImVec2 ts = ImGui::CalcTextSize(event.type.c_str());
@@ -4194,7 +4088,7 @@ static void DrawSystemAnalysis()
     {
         ImGui::TextDisabled("Collecting the first samples...");
 
-        // little loading dots
+        
         {
             const ImVec2 p = ImGui::GetCursorScreenPos();
             const float  t = (float)ImGui::GetTime();
@@ -4217,7 +4111,7 @@ static void DrawSystemAnalysis()
 
     const BackendAnalysis& a = analysisData;
 
-    // ---- Resource usage ----
+    
     SectionHeading("Resource usage");
 
     char cpuText[16];
@@ -4296,7 +4190,7 @@ static void DrawSystemAnalysis()
     ImGui::Separator();
     ImGui::Spacing();
 
-    // ---- Findings ----
+    
     SectionHeading("Findings", "A diagnostic signal, not proof of an intrusion");
 
     if (a.findings.empty())
@@ -4316,7 +4210,7 @@ static void DrawSystemAnalysis()
             ImGui::TextWrapped("%s", finding.c_str());
             ImGui::PopStyleColor();
 
-            // faint highlight card + stripe behind each finding
+            
             const ImVec2 p1 = ImGui::GetCursorScreenPos();
 
             ImDrawList* d = ImGui::GetWindowDrawList();
@@ -4333,7 +4227,7 @@ static void DrawSystemAnalysis()
     ImGui::Separator();
     ImGui::Spacing();
 
-    // ---- Top CPU processes ----
+    
     SectionHeading("Top processes by CPU");
 
     if (ImGui::BeginTable(
@@ -4376,9 +4270,6 @@ static void DrawSystemAnalysis()
     ImGui::EndChild();
 }
 
-// ------------------------------------------------------------
-// FILE SCANNER HELPERS (kept; the new scanner page reuses them)
-// ------------------------------------------------------------
 
 static std::string FormatBytes(unsigned long long b)
 {
@@ -4392,7 +4283,7 @@ static std::string FormatBytes(unsigned long long b)
     return t;
 }
 
-// Thin progress beam: sliding highlight while scanning, solid when finished
+
 static void DrawBeamBar(const ImVec4& color, bool running, bool finished)
 {
     const float  w = std::max(40.0f, ImGui::GetContentRegionAvail().x);
@@ -4438,17 +4329,11 @@ static void SplitPath(const std::string& full, std::string& dir, std::string& na
     }
 }
 
-// ############################################################################
-// SECTION 4 - FILE SCANNER  (replaces DrawFileScanner)
-// Mode cards, live radar with finding blips, speed graph, threat donut,
-// finding cards (click = copy path), filterable findings table.
-// ############################################################################
-
 static void DrawFileScanner()
 {
     static double lastRefresh = -1.0;
     static char   findingSearch[128] = "";
-    static int    levelFilter = 0;                 // 0 all, 1 malicious, 2 suspicious
+    static int    levelFilter = 0;                 
 
     static float  rateHist[60] = {};
     static int    rateOff   = 0;
@@ -4459,7 +4344,7 @@ static void DrawFileScanner()
 
     const double now = ImGui::GetTime();
 
-    // ---- poll the backend 4x per second and sample scan speed ----
+    
     if (lastRefresh < 0.0 || now - lastRefresh >= 0.25)
     {
         const double dt = lastRefresh < 0.0 ? 0.25 : now - lastRefresh;
@@ -4503,7 +4388,7 @@ static void DrawFileScanner()
 
     SectionHeading("File Scanner", "Signature + heuristic scan");
 
-    // ---------------------------------------------------------------- modes
+    
     {
         const float gap = ImGui::GetStyle().ItemSpacing.x;
         const float cw  = (ImGui::GetContentRegionAvail().x - gap * 2.0f) / 3.0f;
@@ -4556,7 +4441,7 @@ static void DrawFileScanner()
         ImGui::EndDisabled();
     }
 
-    // -------------------------------------------------------------- actions
+    
     ImGui::Spacing();
 
     if (!running)
@@ -4618,7 +4503,7 @@ static void DrawFileScanner()
 
     ImGui::Spacing();
 
-    // ----------------------------------------------------------- state text
+    
     ImVec4      stateColor = COLOR_MUTED;
     const char* stateText  = "Ready to scan";
 
@@ -4644,7 +4529,7 @@ static void DrawFileScanner()
 
     ImGui::PushStyleColor(ImGuiCol_ChildBg, COLOR_SIDEBAR);
 
-    // ================================================================ LEFT
+    
     BeginPanel("ScanLive", ImVec2(leftW, panelH), stateColor, true);
 
     {
@@ -4715,7 +4600,7 @@ static void DrawFileScanner()
         DrawBeamBar(stateColor, running, cleanEnd);
         ImGui::Spacing();
 
-        // live counters as tiles
+        
         {
             char files[24], skipped[24], data[24], speed[24];
             std::snprintf(files,   sizeof(files),   "%llu", (unsigned long long)scanStatus.filesScanned);
@@ -4752,7 +4637,7 @@ static void DrawFileScanner()
 
     ImGui::SameLine();
 
-    // =============================================================== RIGHT
+    
     BeginPanel("ScanThreats", ImVec2(0.0f, panelH),
         scanStatus.malicious > 0 ? COLOR_RED : COLOR_ORANGE, true);
 
@@ -4794,7 +4679,7 @@ static void DrawFileScanner()
 
         ImGui::Separator();
 
-        // scrolling list of the latest findings (click a card = copy path)
+    
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
         ImGui::BeginChild("##findcards", ImVec2(0.0f, 0.0f), false);
 
@@ -4871,16 +4756,16 @@ static void DrawFileScanner()
                 (int)(scanFindings.size() - maxCards));
 
         ImGui::EndChild();
-        ImGui::PopStyleColor();   // inner ChildBg
+        ImGui::PopStyleColor();   
     }
 
     ImGui::EndChild();
 
-    ImGui::PopStyleColor();       // COLOR_SIDEBAR
+    ImGui::PopStyleColor();       
 
     ImGui::Spacing();
 
-    // ============================================================== TABLE
+    
     SectionHeading("All findings", "hover a name for score and SHA-256");
 
     int nBad = 0, nSus = 0;
@@ -4960,7 +4845,7 @@ static void DrawFileScanner()
         ImGui::TableSetupColumn("Copy",   ImGuiTableColumnFlags_WidthFixed, 70.0f);
         ImGui::TableHeadersRow();
 
-        for (std::size_t idx = scanFindings.size(); idx-- > 0; )      // newest first
+        for (std::size_t idx = scanFindings.size(); idx-- > 0; )      
         {
             const ScanFinding& f = scanFindings[idx];
 
@@ -5044,11 +4929,6 @@ static void DrawFileScanner()
 }
 
 
-// ############################################################################
-// SECTION 5 - LOGS & REPORTS  (replaces DrawLogsReports)
-// Overview cards: rule-type donut, rule-weight histogram, vault timer ring.
-// ############################################################################
-
 static void DrawLogsReports()
 {
     if (!LogsGate())
@@ -5057,7 +4937,7 @@ static void DrawLogsReports()
     static std::vector<SignatureInfo> signatures;
     static bool loaded = false;
     static char search[128] = "";
-    static int  catFilter = 0;     // 0 All, 1 Known hash, 2 File content, 3 Name / location
+    static int  catFilter = 0;     
 
     if (!loaded)
     {
@@ -5076,7 +4956,7 @@ static void DrawLogsReports()
     };
 
     int hashCount = 0, contentCount = 0, nameCount = 0, instantCount = 0;
-    int wHist[7] = {};                       // weights 1..6 (index 1..6)
+    int wHist[7] = {};                       
 
     for (const SignatureInfo& s : signatures)
     {
@@ -5096,7 +4976,7 @@ static void DrawLogsReports()
 
     SectionHeading("Detection signatures", "what the File Scanner checks for");
 
-    // ============================================================ overview
+    
     {
         const float sp    = ImGui::GetStyle().ItemSpacing.x;
         const float avail = ImGui::GetContentRegionAvail().x;
@@ -5104,7 +4984,7 @@ static void DrawLogsReports()
         const float w2    = (avail - sp * 2.0f) * 0.42f;
         const float cardH = 184.0f;
 
-        // ---- card 1: rules by type (donut) ----
+        
         BeginPanel("RuleTypeCard", ImVec2(w1, cardH), COLOR_CYAN, true);
         {
             ImGui::TextDisabled("RULES BY TYPE");
@@ -5139,7 +5019,7 @@ static void DrawLogsReports()
 
         ImGui::SameLine();
 
-        // ---- card 2: weight histogram ----
+        
         BeginPanel("WeightCard", ImVec2(w2, cardH), COLOR_ORANGE, true);
         {
             ImGui::TextDisabled("RULE WEIGHTS  (orange = flags a file alone)");
@@ -5216,7 +5096,7 @@ static void DrawLogsReports()
 
         ImGui::SameLine();
 
-        // ---- card 3: vault status + auto-lock timer ----
+        
         BeginPanel("VaultCard", ImVec2(0.0f, cardH), COLOR_GREEN, true);
         {
             ImGui::TextDisabled("VAULT");
@@ -5270,7 +5150,7 @@ static void DrawLogsReports()
 
     ImGui::Spacing();
 
-    // ===================================================== change password
+    
     if (ImGui::CollapsingHeader("Change password"))
     {
         static std::string changeMessage;
@@ -5321,7 +5201,7 @@ static void DrawLogsReports()
         ImGui::Spacing();
     }
 
-    // ===================================================== how scoring works
+    
     if (ImGui::CollapsingHeader("How a file is scored"))
     {
         ImGui::PushTextWrapPos(0.0f);
@@ -5341,7 +5221,7 @@ static void DrawLogsReports()
         ImGui::Spacing();
     }
 
-    // ============================================================== filters
+    
     {
         static const char* catLabels[4] =
             { "All", "Known hashes", "File content", "Name / location" };
@@ -5395,11 +5275,11 @@ static void DrawLogsReports()
     ImGui::SameLine();
 
     if (ImGui::Button("Reload"))
-        signatures = FileScanner::getSignatures();   // re-reads hids_hashes.txt
+        signatures = FileScanner::getSignatures();   
 
     ImGui::Spacing();
 
-    // ================================================================ table
+    
     if (ImGui::BeginTable(
             "SignatureTable", 4,
             ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
@@ -5500,7 +5380,7 @@ static void DrawLogsReports()
             ImGui::TextWrapped("%s", s.pattern.c_str());
             ImGui::PopStyleColor();
 
-            // Result as a weight bar
+            
             ImGui::TableSetColumnIndex(3);
 
             if (s.instantMalicious)
@@ -5540,9 +5420,7 @@ static void DrawLogsReports()
     ImGui::EndChild();
 }
 
-// ------------------------------------------------------------
-// NOTIFICATION SETTINGS (shown on the Settings page)
-// ------------------------------------------------------------
+
 
 static void DrawNotificationSettings()
 {
@@ -5578,15 +5456,12 @@ static void DrawNotificationSettings()
     ImGui::EndChild();
 }
 
-// ------------------------------------------------------------
-// FEATURE PAGE: header with Back + only the selected feature
-// ------------------------------------------------------------
 
 static void DrawMainContent()
 {
     RefreshFromBackend();
 
-    // Page content eases up into place when the page opens
+    
     {
         const float k = Smooth01((float)((ImGui::GetTime() - screenChangedAt) / 0.30));
         const float slide = (1.0f - k) * 16.0f;
@@ -5616,8 +5491,7 @@ static void DrawMainContent()
     switch (selectedPage)
     {
     case 0:
-        DrawEngineBanner();     // only while protection is stopped
-        DrawPostureBanner();    // only while protection is running
+        DrawEngineBanner();     
         DrawMetrics();
         ImGui::Spacing();
         DrawThreatPanel();
@@ -5667,10 +5541,6 @@ static void DrawMainContent()
     ImGui::PopStyleVar();
 }
 
-// ------------------------------------------------------------
-// STATUS BAR - thin live strip along the bottom of every screen
-// (protection state, CPU, RAM, alerts, clock)
-// ------------------------------------------------------------
 
 static void DrawStatusBar()
 {
@@ -5692,7 +5562,7 @@ static void DrawStatusBar()
 
     float x = 16.0f;
 
-    // Protection state
+    
     {
         const float wave = 0.5f + 0.5f * std::sin((float)ImGui::GetTime() * 3.0f);
 
@@ -5708,7 +5578,7 @@ static void DrawStatusBar()
         x += ImGui::CalcTextSize(state).x + 28.0f;
     }
 
-    // CPU / RAM mini bars
+    
     auto metric = [&](const char* label, float pct, const ImVec4& mc)
     {
         d->AddText(ImVec2(x, ty), ImGui::GetColorU32(COLOR_MUTED), label);
@@ -5733,7 +5603,7 @@ static void DrawStatusBar()
     metric("CPU", cpuNow, LoadColor(cpuNow));
     metric("RAM", ramNow, LoadColor(ramNow));
 
-    // Alerts
+    
     {
         char v[48];
         std::snprintf(v, sizeof(v), "Alerts  %d", (int)alerts.size());
@@ -5745,7 +5615,7 @@ static void DrawStatusBar()
         d->AddText(ImVec2(x + 14.0f, ty), ImGui::GetColorU32(ac), v);
     }
 
-    // Clock + hint on the right
+    
     {
         std::time_t raw = std::time(nullptr);
         std::tm     tmv = {};
@@ -5777,7 +5647,7 @@ int main()
         return 1;
     }
 
-    // Request OpenGL 3.0
+    
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 
@@ -5796,13 +5666,13 @@ int main()
         return 1;
     }
 
-    // Keep the layout from being squeezed below what the cards need
+    
     glfwSetWindowSizeLimits(window, 1100, 720, GLFW_DONT_CARE, GLFW_DONT_CARE);
 
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
 
-    // Native window handle for the tray icon / desktop notifications
+    
 #ifdef _WIN32
     backend.attachWindow(glfwGetWin32Window(window));
 #endif
@@ -5814,18 +5684,18 @@ int main()
 
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    // Don't write imgui.ini next to the executable
+    
     io.IniFilename = nullptr;
 
     LoadFonts(io);
-    LoadUiConfig();           // saved theme / interface size / demo flag
-    ApplyTheme(themeIndex);   // also builds the ImGui style
-    RefineStyle();            // rounded look, table + scrollbar colours
+    LoadUiConfig();           
+    ApplyTheme(themeIndex);   
+    RefineStyle();            
     InitUiScale(io);
 
     int styledTheme = themeIndex;
 
-    // Seed sparkline history so the cards aren't empty on first frame
+    
     for (int i = 0; i < HISTORY_SIZE; ++i)
     {
         cpuHistory[i] = cpuNow;
@@ -5835,21 +5705,21 @@ int main()
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 130");
 
-    // Monitoring starts only when the user presses Start HIDS / Start protection.
+    
     monitoringActive = backend.isRunning();
 
-    // Main application loop
+    
     while (!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
 
-        // Send queued desktop notifications (must run on the UI thread)
+        
         backend.flushNotifications();
 
-        // Theme clicks are queued and applied here, never mid-frame
+        
         ApplyPendingTheme();
 
-        // A theme change rebuilds the style, so re-apply our refinements
+        
         if (themeIndex != styledTheme)
         {
             RefineStyle();
@@ -5860,15 +5730,15 @@ int main()
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        TrackScreenChange();   // fade + re-lock Logs & Reports when leaving it
-        HandleBackKey();       // Esc: page -> domain -> hub -> welcome
+        TrackScreenChange();   
+        HandleBackKey();       
 
-        // Gradient backdrop + ambient glows; the root window is transparent
+        
         DrawBackdrop();
         DrawAmbient();
         ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
 
-        // Full-window root
+        
         ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
         ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
 
@@ -5889,8 +5759,6 @@ int main()
 
         if (appScreen == SCREEN_PAGE)
         {
-            // A single feature page: header with Back, then only that feature.
-            // The last 30 px stay free for the status bar.
             ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
 
             ImGui::BeginChild(
@@ -5906,17 +5774,17 @@ int main()
         }
         else
         {
-            // Welcome screen, home hub and domain screens
+            
             DrawFullScreen();
         }
 
         ImGui::End();
-        ImGui::PopStyleColor();   // WindowBg
+        ImGui::PopStyleColor();   
 
-        // In-app toast for brand-new alerts (drawn above everything)
+        
         DrawToast();
 
-        // Live status strip along the bottom edge
+        
         DrawStatusBar();
 
         ImGui::Render();
