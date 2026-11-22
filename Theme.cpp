@@ -108,7 +108,7 @@ void ApplyCyberBlue()
     c[ImGuiCol_SliderGrabActive] = ImVec4(0.35f, 0.80f, 1, 1);
     c[ImGuiCol_Separator] = ImVec4(0.19f, 0.24f, 0.34f, 1);
 }
-} // namespace
+} 
 
 void ApplyTheme(Theme theme)
 {
