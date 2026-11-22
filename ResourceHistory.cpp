@@ -40,4 +40,4 @@ void ResourceHistory::clear()
     samples_.clear();
 }
 
-} // namespace hids_analysis
+} 
