@@ -51,6 +51,8 @@ bool LoginMonitor::checkForLoginFailure(Event& event)
     return true;
 }
 
+
+
 bool LoginMonitor::getLatestEvent(std::string& xml,unsigned long long& recordID)
 {
     xml.clear();
@@ -58,11 +60,14 @@ bool LoginMonitor::getLatestEvent(std::string& xml,unsigned long long& recordID)
     recordID = 0;
 
     const char* command =
-        "wevtutil qe Security "
-        "/q:\"*[System[(EventID=4625)]]\" "
-        "/c:1 "
+        "wevtutil qe Security " // this part quesies the security log of windows
+        "/q:\"*[System[(EventID=4625)]]\" " // this part selects the event with id 4625
+        "/c:1 "  // return only one event
         "/rd:true "
         "/f:xml";
+
+
+
 
     FILE* pipe = _popen(command,"r");
 
@@ -80,45 +85,33 @@ bool LoginMonitor::getLatestEvent(std::string& xml,unsigned long long& recordID)
         xml += buffer;
     }
 
-    int result =
-        _pclose(pipe);
+    int result = _pclose(pipe);
 
-    if (result != 0 ||
-        xml.empty())
+    if (result != 0 || xml.empty())
     {
         std::cout<< "[LoginMonitor] ERROR: Could not read "<< "Security Event Log."<< std::endl;
 
         return false;
     }
 
-    const std::string startTag =
-        "<EventRecordID>";
+    const std::string startTag = "<EventRecordID>";
 
-    const std::string endTag =
-        "</EventRecordID>";
+    const std::string endTag = "</EventRecordID>";
 
-    std::size_t start =
-        xml.find(startTag);
+    std::size_t start = xml.find(startTag);
 
-    if (start ==
-        std::string::npos)
+    if (start == std::string::npos)
     {
         std::cout<< "[LoginMonitor] ERROR: EventRecordID "<< "not found."<< std::endl;
 
         return false;
     }
 
-    start +=
-        startTag.length();
+    start += startTag.length();
 
-    std::size_t end =
-        xml.find(
-            endTag,
-            start
-        );
+    std::size_t end = xml.find(endTag,start);
 
-    if (end ==
-        std::string::npos)
+    if (end ==std::string::npos)
     {
         std::cout<< "[LoginMonitor] ERROR: Invalid event XML."<< std::endl;
 
@@ -126,16 +119,12 @@ bool LoginMonitor::getLatestEvent(std::string& xml,unsigned long long& recordID)
     }
 
     std::string recordIDText =
-        xml.substr(
-            start,
-            end - start
-        );
+        xml.substr(start,end - start);
 
     
     try
     {
-        recordID =
-            std::stoull(recordIDText);
+        recordID = std::stoull(recordIDText);
     }
     catch (...)
     {

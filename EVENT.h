@@ -15,12 +15,7 @@ private:
 public:
     Event();
 
-    Event(
-        int id,
-        std::string type,
-        std::string desc,
-        std::string time
-    );
+    Event(int id,std::string type,std::string desc,std::string time);
 
     int getEventID() const;
     std::string getEventType() const;

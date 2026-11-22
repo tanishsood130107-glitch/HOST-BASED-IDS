@@ -7,15 +7,9 @@ static std::string formatTime(std::time_t t)
 {
     char buffer[32];
 
-    std::tm* local =
-        std::localtime(&t);
+    std::tm* local =std::localtime(&t);
+    std::strftime( buffer,sizeof(buffer),"%Y-%m-%d %H:%M:%S",local);
 
-    std::strftime(
-        buffer,
-        sizeof(buffer),
-        "%Y-%m-%d %H:%M:%S",
-        local
-    );
 
     return std::string(buffer);
 }
@@ -35,13 +29,10 @@ Event::Event(int id,std::string type,std::string desc,std::string time) // param
     eventType = type;
     description = desc;
 
-    epochSeconds =
-        std::time(nullptr);
-
+    epochSeconds = std::time(nullptr);
     if (time == "CURRENT_TIME")
     {
-        timestamp =
-            formatTime(epochSeconds);
+        timestamp = formatTime(epochSeconds);
     }
     else
     {
@@ -77,10 +68,7 @@ std::time_t Event::getEpochSeconds() const
 void Event::display() const
 {
     std::cout<< "Event ID   : "<< eventID<< std::endl;
-
     std::cout<< "Event Type : "<< eventType<< std::endl;
-
     std::cout<< "Description: "<< description<< std::endl;
-
     std::cout<< "Timestamp  : "<< timestamp<< std::endl;
 }
