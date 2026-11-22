@@ -12,4 +12,4 @@ void ApplyTheme(Theme theme);
 Theme GetTheme();
 void SetTheme(Theme theme);
 
-} // namespace HIDS
+} 
