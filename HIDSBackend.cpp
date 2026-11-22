@@ -82,7 +82,7 @@ namespace
     }
  
  
-    // ---- Desktop notification helpers ----
+    
  
     int SeverityRank(const std::string& s)
     {
@@ -127,7 +127,7 @@ namespace
         if (!IsWindowVisible(hwnd))
             return TRUE;
  
-        if (GetWindow(hwnd, GW_OWNER) != nullptr)          // owned popups
+        if (GetWindow(hwnd, GW_OWNER) != nullptr)          
             return TRUE;
  
         if (GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW)
@@ -226,7 +226,7 @@ struct HIDSBackend::Impl
     PasswordLock          accessLock;
     int                   lockAlertID = 400000;
  
-    // ---------------- Desktop notifications ----------------
+    
     struct PendingNotice
     {
         std::wstring title;
@@ -234,14 +234,14 @@ struct HIDSBackend::Impl
         DWORD        icon = NIIF_INFO;
     };
  
-    std::unique_ptr<DesktopNotifier> notifier;          // UI thread only
-    std::mutex                       notifyMutex;       // guards the queue + cooldown map
+    std::unique_ptr<DesktopNotifier> notifier;          
+    std::mutex                       notifyMutex;       
     std::deque<PendingNotice>        pendingNotices;
     std::map<std::string, std::chrono::steady_clock::time_point> lastNotified;
     std::atomic<bool>                notifyEnabled{ true };
-    std::atomic<int>                 notifyMinRank{ 1 };   // Medium and above
+    std::atomic<int>                 notifyMinRank{ 1 };   
  
-    // Called from any thread. Only queues; the UI thread sends the toast.
+    
     void queueNotification(const BackendAlert& a, bool force = false)
     {
         if (!force && (!notifyEnabled || SeverityRank(a.severity) < notifyMinRank))
@@ -251,7 +251,7 @@ struct HIDSBackend::Impl
  
         if (!force)
         {
-            // Same rule from the same source: at most one toast per 10 s
+            
             const std::string key = a.source + "|" + a.rule;
             const auto now = std::chrono::steady_clock::now();
             const auto it  = lastNotified.find(key);
@@ -273,8 +273,7 @@ struct HIDSBackend::Impl
         pendingNotices.push_back(std::move(n));
     }
  
-    // Caller must hold dataMutex. Single place where alerts are added.
-    // Lock order: dataMutex -> notifyMutex (flushNotifications never holds both).
+ 
     void insertAlertLocked(const BackendAlert& a)
     {
         alerts.push_front(a);
@@ -766,7 +765,7 @@ void HIDSBackend::start()
     if (impl->running)
         return;
  
-    // A previous run may still be finishing its last cycle
+    
     impl->joinThreads();
     impl->resetPipeline();
  
@@ -786,7 +785,7 @@ void HIDSBackend::shutdown()
     impl->running = false;
     impl->scanner.shutdown();
     impl->joinThreads();
-    impl->notifier.reset();     // destructor removes the tray icon
+    impl->notifier.reset();     
 }
  
 bool HIDSBackend::isRunning() const
@@ -982,12 +981,7 @@ bool HIDSBackend::setPassword(
  
     return true;
 }
- 
- 
- 
-// ------------------------------------------------------------
-// DESKTOP NOTIFICATIONS
-// ------------------------------------------------------------
+
  
 void HIDSBackend::attachWindow(void* nativeWindowHandle)
 {
@@ -998,12 +992,12 @@ void HIDSBackend::attachWindow(void* nativeWindowHandle)
         new DesktopNotifier(static_cast<HWND>(nativeWindowHandle)));
  
     if (!impl->notifier->initialize())
-        impl->notifier.reset();      // no tray icon -> notifications silently disabled
+        impl->notifier.reset();      
 }
  
 void HIDSBackend::flushNotifications()
 {
-    // Keep queued alerts until the notifier is initialized.
+    
     if (!impl->notifier)
         return;
 
@@ -1027,7 +1021,7 @@ void HIDSBackend::flushNotifications()
         return;
     }
 
-    // Select the highest severity in this batch.
+  
     DWORD icon = NIIF_INFO;
 
     for (const Impl::PendingNotice& notice : batch)
@@ -1080,5 +1074,5 @@ void HIDSBackend::sendTestNotification()
     a.rule        = "Test";
     a.description = "Desktop notifications are working.";
  
-    impl->queueNotification(a, true);      // bypasses threshold and cooldown
+    impl->queueNotification(a, true);      
 }
