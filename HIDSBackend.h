@@ -90,7 +90,6 @@ public:
     bool                        endTask(int pid, std::string& message,
                                         const std::string& expectedName = "");
  
-    // ---- Access password ----
     bool                        isLockConfigured() const;
     int                         lockoutSecondsLeft() const;
  
@@ -101,22 +100,18 @@ public:
                                             const std::string& oldPassword,
                                             std::string& message);
  
-    // ---- File scanner ----
     bool                     startScan(ScanType type, const std::string& customPath = "");
     void                     cancelScan();
     bool                     isScanRunning() const;
     ScanStatus               getScanStatus() const;
     std::vector<ScanFinding> getScanFindings() const;
     bool                     exportScanReport(std::string& outPath) const;
- 
-    // ---- Desktop notifications ----
-    // attachWindow: pass the native HWND (as void*) once after window creation.
-    // flushNotifications: call every frame from the UI thread.
+
     void attachWindow(void* nativeWindowHandle);
     void flushNotifications();
     void setNotificationsEnabled(bool enabled);
     bool notificationsEnabled() const;
-    void setNotificationMinSeverity(int rank);   // 0 Low, 1 Medium, 2 High, 3 Critical
+    void setNotificationMinSeverity(int rank);   
     int  notificationMinSeverity() const;
     void sendTestNotification();
  
