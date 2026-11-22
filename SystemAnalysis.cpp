@@ -34,7 +34,7 @@ SystemAnalysisReport SystemAnalysis::analyze(
         }
     }
 
-    // Copy processes and order them by reported CPU usage.
+    
     report.topCpuProcesses = processes;
 
     std::sort(
@@ -57,4 +57,4 @@ SystemAnalysisReport SystemAnalysis::analyze(
     return report;
 }
 
-} // namespace hids_analysis
+} 
