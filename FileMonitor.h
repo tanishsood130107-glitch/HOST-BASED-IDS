@@ -12,22 +12,15 @@ private:
 
     std::string monitoredDirectory;
 
-    std::unordered_map<
-        std::string,
-        long long
-    > previousFiles;
+    std::unordered_map<std::string,long long> previousFiles;
 
     bool initialized;
 
 public:
 
-    FileMonitor(
-        const std::string& directory
-    );
+    FileMonitor(const std::string& directory);
 
-    bool checkForFileChange(
-        Event& event
-    );
+    bool checkForFileChange(Event& event);
 };
 
 #endif
