@@ -29,22 +29,20 @@ Rule::Rule(
 bool Rule::matches(
     const Event& event) const
 {
-    // Event type must match
+    
     if (event.getEventType()
         != eventType)
     {
         return false;
     }
 
-    // If there is no keyword,
-    // event type is enough
+    
     if (matchKeyword.empty())
     {
         return true;
     }
 
-    // Keyword must exist
-    // in event description
+    
     return event.getDescription()
         .find(matchKeyword)
         != string::npos;
