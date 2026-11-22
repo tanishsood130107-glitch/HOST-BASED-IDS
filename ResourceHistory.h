@@ -26,4 +26,4 @@ private:
     std::deque<SystemResourceStats> samples_;
 };
 
-} // namespace hids_analysis
+} 
