@@ -209,10 +209,6 @@ static void InitUiScale(ImGuiIO& io)
     io.FontGlobalScale = baseFontScale * uiScale;
 }
 
-// ------------------------------------------------------------
-// Style
-// ------------------------------------------------------------
-
 static void SetupStyle()
 {
     ImGui::StyleColorsDark();
@@ -308,10 +304,6 @@ static void SetupStyle()
     c[ImGuiCol_PlotHistogram] = COLOR_CYAN;
 }
 
-// ------------------------------------------------------------
-// Apply theme
-// ------------------------------------------------------------
-
 static void ApplyTheme(int index)
 {
     if (index < 0 || index >= THEME_COUNT)
@@ -345,10 +337,6 @@ static void ApplyPendingTheme()
         pendingTheme = -1;
     }
 }
-
-// ------------------------------------------------------------
-// Pill label
-// ------------------------------------------------------------
 
 static void DrawPill(
     const char* text,
@@ -388,10 +376,6 @@ static void DrawPill(
 
     ImGui::Dummy(size);
 }
-
-// ------------------------------------------------------------
-// Charts
-// ------------------------------------------------------------
 
 struct ChartRect
 {
@@ -562,7 +546,6 @@ static void DrawAreaChart(
         );
     }
 
-    // Gradient fill
     {
         const ImVec2 uv =
             ImGui::GetFontTexUvWhitePixel();
@@ -621,7 +604,6 @@ static void DrawAreaChart(
         2.2f
     );
 
-    // Latest sample pulse
     {
         const ImVec2 last = pts[count - 1];
 
@@ -644,7 +626,6 @@ static void DrawAreaChart(
         );
     }
 
-    // Hover tooltip
     if (hovered)
     {
         const float mx = ImGui::GetIO().MousePos.x;
@@ -711,10 +692,6 @@ static void DrawAreaChart(
         );
     }
 }
-
-// ------------------------------------------------------------
-// Bar chart
-// ------------------------------------------------------------
 
 static void DrawBarChart(
     const char* id,
@@ -820,10 +797,6 @@ static void DrawBarChart(
     }
 }
 
-// ------------------------------------------------------------
-// Backdrop
-// ------------------------------------------------------------
-
 static void DrawBackdrop()
 {
     const ImVec2 size =
@@ -867,10 +840,6 @@ static void DrawGlow(
         );
     }
 }
-
-// ------------------------------------------------------------
-// Ring gauge
-// ------------------------------------------------------------
 
 static void DrawGauge(
     ImDrawList* d,
@@ -918,10 +887,6 @@ static void DrawGauge(
     }
 }
 
-// ------------------------------------------------------------
-// Data source badge
-// ------------------------------------------------------------
-
 static void DataSourceBadge(bool monitoringOn)
 {
     if (demoMode)
@@ -933,10 +898,6 @@ static void DataSourceBadge(bool monitoringOn)
     else
         DrawPill("MONITORING STOPPED", COLOR_RED);
 }
-
-// ------------------------------------------------------------
-// Sidebar icons
-// ------------------------------------------------------------
 
 static void DrawPageIcon(
     ImDrawList* d,
@@ -1139,10 +1100,6 @@ static void DrawPageIcon(
     }
 }
 
-// ------------------------------------------------------------
-// Settings page helpers
-// ------------------------------------------------------------
-
 static void ThemeHeading(
     const char* title,
     const char* hint = nullptr)
@@ -1185,10 +1142,6 @@ static void ThemeHeading(
 
     ImGui::Spacing();
 }
-
-// ------------------------------------------------------------
-// Settings page
-// ------------------------------------------------------------
 
 static void DrawSettingsPage(bool monitoringOn)
 {
@@ -1434,7 +1387,6 @@ static void DrawSettingsPage(bool monitoringOn)
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Interface size
     ThemeHeading("Interface");
 
     ImGui::TextUnformatted("Interface size");
@@ -1460,7 +1412,6 @@ static void DrawSettingsPage(bool monitoringOn)
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Data source
     ThemeHeading(
         "Data source",
         "real monitoring vs sample data"
